@@ -1,0 +1,14 @@
+[Unit]
+Description=Backup Comicollect SQLite database
+
+[Service]
+Type=oneshot
+User=comicollect
+Group=comicollect
+EnvironmentFile=/etc/comicollect.env
+ExecStart=/usr/bin/python3 /opt/comicollect/comicollect_server.py --backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/comicollect /var/backups/comicollect
