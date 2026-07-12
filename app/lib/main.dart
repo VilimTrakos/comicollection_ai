@@ -68,6 +68,7 @@ class _LoginGateState extends State<LoginGate> {
   final email = TextEditingController(text: 'demo@comicollect.local');
   final password = TextEditingController(text: 'demo');
   bool entered = false;
+  int step = 0;
 
   @override
   void dispose() {
@@ -79,6 +80,8 @@ class _LoginGateState extends State<LoginGate> {
   @override
   Widget build(BuildContext context) {
     if (entered) return Shell(controller: widget.controller);
+    if (step == 0) return _welcome();
+    if (step == 1) return _mode();
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -89,10 +92,8 @@ class _LoginGateState extends State<LoginGate> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const Icon(Icons.auto_stories, color: red, size: 72),
-                  const SizedBox(height: 22),
                   const Text(
-                    'COMICOLLECT',
+                    'PRIJAVA',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: red,
@@ -103,7 +104,7 @@ class _LoginGateState extends State<LoginGate> {
                   ),
                   const SizedBox(height: 8),
                   const Text(
-                    'Tvoja kolekcija. Uvijek uz tebe.',
+                    'Račun čuva kolekciju na serveru — telefon, tablet i web uvijek isto.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: tan),
                   ),
@@ -131,15 +132,24 @@ class _LoginGateState extends State<LoginGate> {
                     child: const Padding(
                       padding: EdgeInsets.all(15),
                       child: Text(
-                        'PRIJAVA',
+                        'PRIJAVI SE',
                         style: TextStyle(fontWeight: FontWeight.w900),
                       ),
                     ),
                   ),
                   const SizedBox(height: 12),
-                  TextButton(
+                  OutlinedButton(
                     onPressed: () => setState(() => entered = true),
-                    child: const Text('NASTAVI KAO GOST'),
+                    child: const Padding(
+                      padding: EdgeInsets.all(13),
+                      child: Text(
+                        'NAPRAVI NOVI RAČUN',
+                        style: TextStyle(
+                          color: red,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 20),
                   const Text(
@@ -155,6 +165,208 @@ class _LoginGateState extends State<LoginGate> {
       ),
     );
   }
+
+  Widget _welcome() => Scaffold(
+    body: Stack(
+      fit: StackFit.expand,
+      children: [
+        ComicCover(label: 'COMICS COLLECTION', seed: 17),
+        const DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [Colors.transparent, Color(0x99131412), ink],
+              stops: [0, .48, .72],
+            ),
+          ),
+        ),
+        SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(32, 20, 32, 46),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                const Text(
+                  'COMICS\nCOLLECTION',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: red,
+                    fontSize: 42,
+                    height: .96,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 1.5,
+                    shadows: [Shadow(color: Color(0xAA8E1410), blurRadius: 18)],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Tvoja kolekcija — uvijek uz tebe.\nRadi i bez interneta, sinkronizira se sama.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: tan, fontSize: 15, height: 1.55),
+                ),
+                const SizedBox(height: 26),
+                SizedBox(
+                  width: double.infinity,
+                  child: FilledButton(
+                    onPressed: () => setState(() => step = 1),
+                    child: const Padding(
+                      padding: EdgeInsets.all(14),
+                      child: Text(
+                        'UĐI U KOLEKCIJU',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextButton(
+                  onPressed: () => setState(() => entered = true),
+                  child: const Text(
+                    'Nastavi kao gost',
+                    style: TextStyle(color: Colors.white),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                const Chip(
+                  avatar: Icon(
+                    Icons.cloud_done_outlined,
+                    color: Color(0xFF3EC63E),
+                    size: 16,
+                  ),
+                  label: Text(
+                    'Lokalno spremanje',
+                    style: TextStyle(color: Color(0xFF3EC63E), fontSize: 11),
+                  ),
+                  backgroundColor: Color(0x223EC63E),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _mode() => Scaffold(
+    appBar: AppBar(
+      leading: IconButton(
+        onPressed: () => setState(() => step = 0),
+        icon: const Icon(Icons.arrow_back_ios_new),
+      ),
+    ),
+    body: Stack(
+      children: [
+        const Positioned.fill(child: _GrungeBackground()),
+        ListView(
+          padding: const EdgeInsets.fromLTRB(28, 20, 28, 30),
+          children: [
+            const Text(
+              'TKO SI?',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: red,
+                fontSize: 34,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'Odaberi način rada — možeš ga promijeniti odjavom.',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: tan, height: 1.5),
+            ),
+            const SizedBox(height: 24),
+            _ModeCard(
+              primary: true,
+              icon: Icons.favorite_border,
+              title: 'Osobna kolekcija',
+              subtitle:
+                  'Tvoja polica — skeniranje, čitanje, tražim, zamjene i sinkronizacija na svim uređajima.',
+              onTap: () => setState(() => step = 2),
+            ),
+            const SizedBox(height: 12),
+            _ModeCard(
+              icon: Icons.business_center_outlined,
+              title: 'Enterprise — poslovnica',
+              subtitle:
+                  'Za knjižnice i strip dućane. Aktivacija preko ugovora, inventar i posudbe članova.',
+              onTap: () => ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text(
+                    'Enterprise način nije dio osobne demo verzije.',
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    ),
+  );
+}
+
+class _ModeCard extends StatelessWidget {
+  const _ModeCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.primary = false,
+  });
+  final IconData icon;
+  final String title, subtitle;
+  final VoidCallback onTap;
+  final bool primary;
+  @override
+  Widget build(BuildContext context) => Material(
+    color: primary ? red : surface,
+    borderRadius: BorderRadius.circular(18),
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: primary ? .18 : .05),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: primary ? Colors.white : red),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              subtitle,
+              style: TextStyle(
+                color: primary ? Colors.white70 : tan,
+                fontSize: 12.5,
+                height: 1.55,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'NASTAVI  ▶',
+              style: TextStyle(
+                color: primary ? Colors.white : red,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ],
+        ),
+      ),
+    ),
+  );
 }
 
 class Shell extends StatefulWidget {
@@ -187,9 +399,88 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   }
 
   void addComic() async {
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ComicForm(controller: widget.controller),
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: surface,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.only(bottom: 14),
+                decoration: BoxDecoration(
+                  color: tan.withValues(alpha: .25),
+                  borderRadius: BorderRadius.circular(99),
+                ),
+              ),
+              const Text(
+                'DODAJ STRIP',
+                style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1),
+              ),
+              const SizedBox(height: 12),
+              _AddOption(
+                icon: Icons.qr_code_scanner,
+                title: 'Skeniraj barkod',
+                subtitle: 'Najbrži način — uperi u stražnju koricu',
+                primary: true,
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const _ScannerPlaceholder(),
+                    ),
+                  );
+                },
+              ),
+              _AddOption(
+                icon: Icons.search,
+                title: 'Traži po nazivu',
+                subtitle: 'Pretraži bazu serijala i brojeva',
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  setState(() => index = 2);
+                },
+              ),
+              _AddOption(
+                icon: Icons.edit_outlined,
+                title: 'Ručni unos',
+                subtitle: 'Upiši serijal, broj i stanje sam',
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ComicForm(controller: widget.controller),
+                    ),
+                  );
+                },
+              ),
+              _AddOption(
+                icon: Icons.dynamic_feed_outlined,
+                title: 'Unos raspona',
+                subtitle: 'Cijela kolekcija odjednom — npr. 1–50',
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ComicForm(controller: widget.controller),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -276,6 +567,123 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
   );
 }
 
+class _AddOption extends StatelessWidget {
+  const _AddOption({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.primary = false,
+  });
+  final IconData icon;
+  final String title, subtitle;
+  final VoidCallback onTap;
+  final bool primary;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.only(bottom: 10),
+    child: Material(
+      color: primary ? red : const Color(0xFF080909),
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.all(14),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: primary ? .18 : .06),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: primary ? Colors.white : red),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: const TextStyle(
+                        fontSize: 15.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: TextStyle(
+                        color: primary ? Colors.white70 : tan,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Icon(
+                Icons.play_arrow,
+                color: primary ? Colors.white : red,
+                size: 17,
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+class _ScannerPlaceholder extends StatelessWidget {
+  const _ScannerPlaceholder();
+  @override
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    appBar: AppBar(
+      backgroundColor: Colors.transparent,
+      title: const Text(
+        'BRZO SKENIRANJE',
+        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
+      ),
+    ),
+    body: Stack(
+      children: [
+        const Positioned.fill(child: ColoredBox(color: Color(0xFF080909))),
+        Center(
+          child: Container(
+            width: 270,
+            height: 180,
+            decoration: BoxDecoration(
+              border: Border.all(color: red, width: 3),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: const Center(
+              child: Icon(
+                Icons.qr_code_scanner,
+                size: 72,
+                color: Colors.white54,
+              ),
+            ),
+          ),
+        ),
+        const Positioned(
+          left: 30,
+          right: 30,
+          bottom: 70,
+          child: Text(
+            'Uperi kameru u barkod. Demo način nema aktivnu kameru.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: Colors.white70),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class SyncBadge extends StatelessWidget {
   const SyncBadge({super.key, required this.controller});
   final AppController controller;
@@ -325,7 +733,17 @@ class HomePage extends StatelessWidget {
       0,
       (sum, c) => sum + (c.estimatedValue ?? 0),
     );
-    final loaned = owned.where((c) => c.loanedTo.isNotEmpty).length;
+    final editions = <String, List<Comic>>{};
+    for (final comic in controller.comics) {
+      editions
+          .putIfAbsent('${comic.series} · ${comic.edition}', () => [])
+          .add(comic);
+    }
+    final closest = editions.entries.toList()
+      ..sort(
+        (a, b) => (b.value.where((c) => c.owned).length / b.value.length)
+            .compareTo(a.value.where((c) => c.owned).length / a.value.length),
+      );
     return RefreshIndicator(
       onRefresh: controller.sync,
       child: ListView(
@@ -335,25 +753,39 @@ class HomePage extends StatelessWidget {
             '${owned.length} stripova · ${value.toStringAsFixed(2)} €',
             style: const TextStyle(color: tan),
           ),
-          const SizedBox(height: 18),
-          Row(
-            children: [
-              Expanded(
-                child: MetricCard(
-                  icon: Icons.auto_stories,
-                  value: '${unread.length}',
-                  label: 'NEPROČITANO',
+          const SectionTitle('U NAJAVI'),
+          SizedBox(
+            height: 142,
+            child: Row(
+              children: const [
+                Expanded(
+                  child: _ReleaseCard(
+                    day: '28',
+                    month: 'LIP',
+                    title: 'DYLAN DOG #202',
+                    seed: 1,
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: MetricCard(
-                  icon: Icons.people_outline,
-                  value: '$loaned',
-                  label: 'POSUĐENO',
+                SizedBox(width: 10),
+                Expanded(
+                  child: _ReleaseCard(
+                    day: '05',
+                    month: 'SRP',
+                    title: 'EXTRA #167',
+                    seed: 2,
+                  ),
                 ),
-              ),
-            ],
+                SizedBox(width: 10),
+                Expanded(
+                  child: _ReleaseCard(
+                    day: '12',
+                    month: 'SRP',
+                    title: 'SPECIAL',
+                    seed: 3,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SectionTitle('NASTAVI ČITATI'),
           if (unread.isEmpty)
@@ -369,7 +801,159 @@ class HomePage extends StatelessWidget {
               text:
                   'Otvori Poliču, odaberi Dylan Dog ediciju i označi brojeve koje imaš.',
             ),
+          const SectionTitle('NAJBLIŽE KOMPLETIRANJU'),
+          ...closest
+              .take(2)
+              .map(
+                (entry) => _ProgressRow(name: entry.key, comics: entry.value),
+              ),
         ],
+      ),
+    );
+  }
+}
+
+class _ReleaseCard extends StatelessWidget {
+  const _ReleaseCard({
+    required this.day,
+    required this.month,
+    required this.title,
+    required this.seed,
+  });
+  final String day, month, title;
+  final int seed;
+  @override
+  Widget build(BuildContext context) => Card(
+    clipBehavior: Clip.antiAlias,
+    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              ComicCover(label: title.split(' ').first, seed: seed),
+              Positioned(
+                top: 6,
+                left: 6,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 7,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xDD060808),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Column(
+                    children: [
+                      Text(
+                        day,
+                        style: const TextStyle(
+                          color: red,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        month,
+                        style: const TextStyle(color: tan, fontSize: 9),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(7),
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 11.5, fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _ProgressRow extends StatelessWidget {
+  const _ProgressRow({required this.name, required this.comics});
+  final String name;
+  final List<Comic> comics;
+  @override
+  Widget build(BuildContext context) {
+    final owned = comics.where((c) => c.owned).length;
+    final progress = comics.isEmpty ? 0.0 : owned / comics.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 9),
+      child: Card(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        child: Padding(
+          padding: const EdgeInsets.all(11),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 46,
+                height: 62,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(7),
+                  child: ComicCover(
+                    label: name.split(' · ').first,
+                    seed: name.hashCode,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 13),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        Text(
+                          '$owned/${comics.length}',
+                          style: const TextStyle(color: tan, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: LinearProgressIndicator(
+                        value: progress,
+                        minHeight: 7,
+                        backgroundColor: const Color(0xFF080909),
+                        color: red,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      'još ${comics.length - owned} do kompleta',
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -382,7 +966,7 @@ class ShelfPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final groups = <String, List<Comic>>{};
     for (final c in controller.comics) {
-      groups.putIfAbsent('${c.series} · ${c.edition}', () => []).add(c);
+      groups.putIfAbsent(c.series, () => []).add(c);
     }
     final names = groups.keys.toList()..sort();
     if (names.isEmpty) {
@@ -468,24 +1052,272 @@ class SeriesPage extends StatelessWidget {
   final List<Comic> comics;
   final AppController controller;
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      title: Text(
-        name.toUpperCase(),
-        style: const TextStyle(color: red, fontWeight: FontWeight.w900),
+  Widget build(BuildContext context) {
+    final editions = <String, List<Comic>>{};
+    for (final comic in comics) {
+      editions.putIfAbsent(comic.edition, () => []).add(comic);
+    }
+    return Scaffold(
+      appBar: AppBar(
+        centerTitle: true,
+        title: Text(
+          name.toUpperCase(),
+          style: const TextStyle(
+            color: red,
+            fontSize: 28,
+            fontWeight: FontWeight.w900,
+            letterSpacing: 1,
+          ),
+        ),
       ),
-    ),
-    body: ListView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
-      children: comics
-          .map(
-            (c) => Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: ComicTile(comic: c, controller: controller),
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _GrungeBackground()),
+          ListView(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
+            children: editions.entries.map((entry) {
+              final issues = entry.value
+                ..sort((a, b) => a.number.compareTo(b.number));
+              final owned = issues.where((c) => c.owned).length;
+              final publisher = issues.first.publisher;
+              final progress = issues.isEmpty ? 0.0 : owned / issues.length;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Card(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(16),
+                    onTap: () => Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (_) => EditionPage(
+                          series: name,
+                          edition: entry.key,
+                          comics: issues,
+                          controller: controller,
+                        ),
+                      ),
+                    ),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Row(
+                        children: [
+                          SizedBox(
+                            width: 58,
+                            height: 78,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: ComicCover(
+                                label: name,
+                                seed: entry.key.hashCode,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  publisher,
+                                  style: const TextStyle(
+                                    color: tan,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                                const SizedBox(height: 3),
+                                Text(
+                                  entry.key.toUpperCase(),
+                                  style: const TextStyle(
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: .5,
+                                  ),
+                                ),
+                                const SizedBox(height: 9),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: ClipRRect(
+                                        borderRadius: BorderRadius.circular(99),
+                                        child: LinearProgressIndicator(
+                                          value: progress,
+                                          minHeight: 6,
+                                          backgroundColor: const Color(
+                                            0xFF080909,
+                                          ),
+                                          color: red,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 9),
+                                    Text(
+                                      '$owned/${issues.length}',
+                                      style: const TextStyle(
+                                        color: tan,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const Icon(Icons.play_arrow, color: red, size: 18),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class EditionPage extends StatefulWidget {
+  const EditionPage({
+    super.key,
+    required this.series,
+    required this.edition,
+    required this.comics,
+    required this.controller,
+  });
+  final String series, edition;
+  final List<Comic> comics;
+  final AppController controller;
+  @override
+  State<EditionPage> createState() => _EditionPageState();
+}
+
+class _EditionPageState extends State<EditionPage> {
+  bool dense = true;
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller,
+    builder: (context, _) {
+      final issues =
+          widget.controller.comics
+              .where(
+                (c) => c.series == widget.series && c.edition == widget.edition,
+              )
+              .toList()
+            ..sort((a, b) => a.number.compareTo(b.number));
+      return Scaffold(
+        appBar: AppBar(
+          title: Text(
+            '${widget.series.toUpperCase()} · ${widget.edition.toUpperCase()}',
+            style: const TextStyle(
+              color: red,
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
             ),
-          )
-          .toList(),
-    ),
+          ),
+          actions: [
+            IconButton(
+              tooltip: dense ? 'Udoban prikaz' : 'Zbijeni prikaz',
+              onPressed: () => setState(() => dense = !dense),
+              icon: Icon(
+                dense ? Icons.view_agenda_outlined : Icons.view_list_outlined,
+              ),
+            ),
+          ],
+        ),
+        body: ListView.separated(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
+          itemCount: issues.length,
+          separatorBuilder: (_, _) => const SizedBox(height: 7),
+          itemBuilder: (context, i) {
+            final comic = issues[i];
+            if (!dense) {
+              return ComicTile(comic: comic, controller: widget.controller);
+            }
+            return Material(
+              color: surface,
+              borderRadius: BorderRadius.circular(12),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(12),
+                onTap: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => ComicDetail(
+                      comic: comic,
+                      controller: widget.controller,
+                    ),
+                  ),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 8,
+                  ),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 36,
+                        child: Text(
+                          '#${comic.number}',
+                          style: const TextStyle(
+                            color: red,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Text(
+                          comic.title,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'Pročitano',
+                        onPressed: comic.owned
+                            ? () => widget.controller.save(
+                                comic.copyWith(read: !comic.read),
+                              )
+                            : null,
+                        icon: Icon(
+                          Icons.visibility_outlined,
+                          size: 17,
+                          color: comic.read ? const Color(0xFF3EC63E) : red,
+                        ),
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: 'U kolekciji',
+                        onPressed: () => widget.controller.save(
+                          comic.copyWith(
+                            owned: !comic.owned,
+                            read: comic.owned ? false : comic.read,
+                          ),
+                        ),
+                        icon: Icon(
+                          comic.owned ? Icons.check : Icons.close,
+                          size: 18,
+                          color: comic.owned ? const Color(0xFF3EC63E) : red,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    },
   );
 }
 
