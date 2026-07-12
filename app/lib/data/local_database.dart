@@ -50,6 +50,21 @@ class LocalDatabase {
     conflictAlgorithm: ConflictAlgorithm.replace,
   );
 
+  Future<void> upsertAll(Iterable<Comic> comics) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final comic in comics) {
+        batch.insert(
+          'comics',
+          comic.toMap(),
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
   Future<void> mergeRemote(Iterable<Comic> remote) async {
     final db = await database;
     await db.transaction((txn) async {

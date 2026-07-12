@@ -53,8 +53,108 @@ class ComicollectApp extends StatelessWidget {
         ),
       ),
     ),
-    home: Shell(controller: controller),
+    home: LoginGate(controller: controller),
   );
+}
+
+class LoginGate extends StatefulWidget {
+  const LoginGate({super.key, required this.controller});
+  final AppController controller;
+  @override
+  State<LoginGate> createState() => _LoginGateState();
+}
+
+class _LoginGateState extends State<LoginGate> {
+  final email = TextEditingController(text: 'demo@comicollect.local');
+  final password = TextEditingController(text: 'demo');
+  bool entered = false;
+
+  @override
+  void dispose() {
+    email.dispose();
+    password.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (entered) return Shell(controller: widget.controller);
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.all(28),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 420),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Icon(Icons.auto_stories, color: red, size: 72),
+                  const SizedBox(height: 22),
+                  const Text(
+                    'COMICOLLECT',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: red,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 30,
+                      letterSpacing: 2,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Tvoja kolekcija. Uvijek uz tebe.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: tan),
+                  ),
+                  const SizedBox(height: 38),
+                  TextField(
+                    controller: email,
+                    keyboardType: TextInputType.emailAddress,
+                    decoration: const InputDecoration(
+                      labelText: 'E-mail',
+                      prefixIcon: Icon(Icons.mail_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: password,
+                    obscureText: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Lozinka',
+                      prefixIcon: Icon(Icons.lock_outline),
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton(
+                    onPressed: () => setState(() => entered = true),
+                    child: const Padding(
+                      padding: EdgeInsets.all(15),
+                      child: Text(
+                        'PRIJAVA',
+                        style: TextStyle(fontWeight: FontWeight.w900),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: () => setState(() => entered = true),
+                    child: const Text('NASTAVI KAO GOST'),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'Demo prijava je lokalna i prihvaća unesene podatke. Server nije potreban.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class Shell extends StatefulWidget {
@@ -261,14 +361,13 @@ class HomePage extends StatelessWidget {
           else
             ComicTile(comic: unread.first, controller: controller),
           const SectionTitle('NEDAVNO DODANO'),
-          ...controller.comics
-              .toList()
-              .reversed
+          ...owned.reversed
               .take(4)
               .map((c) => ComicTile(comic: c, controller: controller)),
-          if (controller.comics.isEmpty)
+          if (owned.isEmpty)
             const EmptyCard(
-              text: 'Tvoja polica je prazna. Dodaj prvi strip tipkom +.',
+              text:
+                  'Otvori Poliču, odaberi Dylan Dog ediciju i označi brojeve koje imaš.',
             ),
         ],
       ),
@@ -283,7 +382,7 @@ class ShelfPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final groups = <String, List<Comic>>{};
     for (final c in controller.comics) {
-      groups.putIfAbsent(c.series, () => []).add(c);
+      groups.putIfAbsent('${c.series} · ${c.edition}', () => []).add(c);
     }
     final names = groups.keys.toList()..sort();
     if (names.isEmpty) {
@@ -505,14 +604,36 @@ class ComicTile extends StatelessWidget {
                 ],
               ),
             ),
-            IconButton(
-              tooltip: comic.read ? 'Označi nepročitano' : 'Označi pročitano',
-              onPressed: () =>
-                  controller.save(comic.copyWith(read: !comic.read)),
-              icon: Icon(
-                comic.read ? Icons.visibility : Icons.visibility_off,
-                color: comic.read ? const Color(0xFF3EC63E) : red,
-              ),
+            Column(
+              children: [
+                IconButton(
+                  tooltip: comic.owned
+                      ? 'Imam — ukloni s police'
+                      : 'Dodaj na moju policu',
+                  onPressed: () => controller.save(
+                    comic.copyWith(
+                      owned: !comic.owned,
+                      read: comic.owned ? false : comic.read,
+                    ),
+                  ),
+                  icon: Icon(
+                    comic.owned ? Icons.check_circle : Icons.add_circle_outline,
+                    color: comic.owned ? const Color(0xFF3EC63E) : tan,
+                  ),
+                ),
+                IconButton(
+                  tooltip: comic.read
+                      ? 'Označi nepročitano'
+                      : 'Označi pročitano',
+                  onPressed: comic.owned
+                      ? () => controller.save(comic.copyWith(read: !comic.read))
+                      : null,
+                  icon: Icon(
+                    comic.read ? Icons.visibility : Icons.visibility_off,
+                    color: comic.read ? const Color(0xFF3EC63E) : Colors.grey,
+                  ),
+                ),
+              ],
             ),
           ],
         ),

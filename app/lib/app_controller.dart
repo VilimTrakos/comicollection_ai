@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'data/local_database.dart';
 import 'data/sync_service.dart';
@@ -16,11 +17,86 @@ class AppController extends ChangeNotifier {
   Timer? _timer;
 
   Future<void> init() async {
+    await _seedStarterCatalog();
     comics = await db.all();
     loading = false;
     notifyListeners();
     unawaited(sync());
     _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
+  }
+
+  Future<void> _seedStarterCatalog() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (prefs.getBool('starter_catalog_v1') ?? false) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final issues = <Comic>[];
+
+    void edition({
+      required String code,
+      required String name,
+      required String publisher,
+      required int first,
+      required int last,
+      int? firstYear,
+    }) {
+      for (var number = first; number <= last; number++) {
+        issues.add(
+          Comic(
+            id: 'catalog-$code-$number',
+            series: 'Dylan Dog',
+            edition: name,
+            number: number,
+            title: 'Dylan Dog #$number',
+            publisher: publisher,
+            year: firstYear == null
+                ? null
+                : firstYear + ((number - first) ~/ 12),
+            owned: false,
+            read: false,
+            condition: 'F',
+            notes: 'Početni katalog · BSP oznaka $code',
+            updatedAt: now,
+          ),
+        );
+      }
+    }
+
+    // Starter catalogue follows the publisher/number ranges documented by BSP.
+    edition(
+      code: 'DESD',
+      name: 'Extra (SD)',
+      publisher: 'Slobodna Dalmacija',
+      first: 1,
+      last: 12,
+      firstYear: 1999,
+    );
+    edition(
+      code: 'DELU',
+      name: 'Extra (L)',
+      publisher: 'Ludens',
+      first: 13,
+      last: 166,
+      firstYear: 2002,
+    );
+    edition(
+      code: 'DDSD',
+      name: 'Regularna (SD)',
+      publisher: 'Slobodna Dalmacija',
+      first: 1,
+      last: 60,
+      firstYear: 1994,
+    );
+    edition(
+      code: 'DDLU',
+      name: 'Regularna (L)',
+      publisher: 'Ludens',
+      first: 61,
+      last: 201,
+      firstYear: 2002,
+    );
+
+    await db.upsertAll(issues);
+    await prefs.setBool('starter_catalog_v1', true);
   }
 
   Future<void> save(Comic comic) async {
