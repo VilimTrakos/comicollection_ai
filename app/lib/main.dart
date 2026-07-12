@@ -647,77 +647,279 @@ class ComicDetail extends StatelessWidget {
   final Comic comic;
   final AppController controller;
   @override
-  Widget build(BuildContext context) => Scaffold(
-    appBar: AppBar(
-      actions: [
-        IconButton(
-          onPressed: () async {
-            await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => ComicForm(controller: controller, comic: comic),
-              ),
-            );
-            if (context.mounted) Navigator.pop(context);
-          },
-          icon: const Icon(Icons.edit_outlined),
-        ),
-        IconButton(
-          onPressed: () => _delete(context),
-          icon: const Icon(Icons.delete_outline),
-        ),
-      ],
-    ),
-    body: ListView(
-      padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
-      children: [
-        Center(
-          child: SizedBox(
-            width: 190,
-            height: 260,
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(18),
-              child: ComicCover(
-                label: '${comic.series}\n#${comic.number}',
-                seed: comic.series.hashCode + comic.number,
-              ),
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final current =
+          controller.comics.where((c) => c.id == comic.id).firstOrNull ?? comic;
+      final edition =
+          controller.comics
+              .where(
+                (c) =>
+                    c.series == current.series && c.edition == current.edition,
+              )
+              .toList()
+            ..sort((a, b) => a.number.compareTo(b.number));
+      final at = edition.indexWhere((c) => c.id == current.id);
+      final previous = at > 0 ? edition[at - 1] : null;
+      final next = at >= 0 && at < edition.length - 1 ? edition[at + 1] : null;
+      return Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: Text(
+            current.series.toUpperCase(),
+            style: const TextStyle(
+              color: red,
+              fontSize: 25,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1,
             ),
           ),
         ),
-        const SizedBox(height: 24),
-        Text(
-          '${comic.series} #${comic.number}',
-          textAlign: TextAlign.center,
-          style: const TextStyle(
-            fontSize: 26,
-            fontWeight: FontWeight.w900,
-            color: red,
-          ),
+        body: Stack(
+          children: [
+            const Positioned.fill(child: _GrungeBackground()),
+            ListView(
+              padding: const EdgeInsets.fromLTRB(24, 4, 24, 32),
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 150,
+                      height: 200,
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: ComicCover(
+                          label: '${current.series}\n#${current.number}',
+                          seed: current.series.hashCode + current.number,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 4),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${current.series} ${current.edition}',
+                              style: const TextStyle(
+                                fontSize: 17,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '#${current.number} - ${current.title}',
+                              style: const TextStyle(
+                                fontSize: 15.5,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 9),
+                            Text(
+                              '${current.year ?? '—'} · ${current.publisher}',
+                              style: const TextStyle(color: tan, fontSize: 13),
+                            ),
+                            const SizedBox(height: 12),
+                            if (current.owned)
+                              Row(
+                                children: [
+                                  Container(
+                                    width: 36,
+                                    height: 36,
+                                    alignment: Alignment.center,
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF080909),
+                                      borderRadius: BorderRadius.circular(9),
+                                      border: Border.all(
+                                        color: red,
+                                        width: 1.5,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      current.condition,
+                                      style: const TextStyle(
+                                        color: red,
+                                        fontWeight: FontWeight.w900,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 9),
+                                  Text(
+                                    current.estimatedValue == null
+                                        ? 'U kolekciji'
+                                        : '~${current.estimatedValue!.toStringAsFixed(0)} €',
+                                    style: const TextStyle(
+                                      color: tan,
+                                      fontSize: 12.5,
+                                    ),
+                                  ),
+                                ],
+                              )
+                            else
+                              const Text(
+                                'TRAŽIM',
+                                style: TextStyle(
+                                  color: red,
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                if (current.loanedTo.isNotEmpty)
+                  Container(
+                    margin: const EdgeInsets.only(top: 14),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: red.withValues(alpha: .14),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: red.withValues(alpha: .45)),
+                    ),
+                    child: Text(
+                      'Posuđeno: ${current.loanedTo}',
+                      style: const TextStyle(fontSize: 12.5),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 14),
+                  child: Text(
+                    current.notes.startsWith('Početni katalog')
+                        ? 'Kultni talijanski horror strip prati istražitelja noćnih mora Dylana Doga i njegove neobične slučajeve.'
+                        : current.notes,
+                    style: const TextStyle(
+                      color: tan,
+                      fontSize: 13.5,
+                      height: 1.55,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _IssueStep(
+                        label: 'Prethodni broj',
+                        comic: previous,
+                        controller: controller,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _IssueStep(
+                        label: 'Sljedeći broj',
+                        comic: next,
+                        controller: controller,
+                        right: true,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _StatusAction(
+                        active: current.read,
+                        icon: Icons.visibility_outlined,
+                        activeLabel: 'PROČITANO',
+                        inactiveLabel: 'NIJE ČITANO',
+                        onTap: current.owned
+                            ? () => controller.save(
+                                current.copyWith(read: !current.read),
+                              )
+                            : null,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _StatusAction(
+                        active: current.owned,
+                        icon: Icons.check,
+                        activeLabel: 'U KOLEKCIJI',
+                        inactiveLabel: '+ DODAJ',
+                        onTap: () => controller.save(
+                          current.copyWith(
+                            owned: !current.owned,
+                            read: current.owned ? false : current.read,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) =>
+                          ComicForm(controller: controller, comic: current),
+                    ),
+                  ),
+                  icon: const Icon(Icons.edit_outlined, size: 17),
+                  label: Text(
+                    current.owned
+                        ? 'UREDI PRIMJERAK — stanje, posudba, vrijednost'
+                        : 'UREDI — bilješke i ciljna cijena',
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: tan,
+                    side: BorderSide(color: tan.withValues(alpha: .2)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+                const SectionTitle('DETALJI IZDANJA'),
+                Card(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      children: [
+                        DetailRow('Izdavač', current.publisher),
+                        DetailRow(
+                          'Edicija',
+                          '${current.edition} #${current.number}',
+                        ),
+                        DetailRow('Godina', current.year?.toString() ?? '—'),
+                        DetailRow('Stanje', current.condition),
+                        DetailRow(
+                          'Vrijednost',
+                          current.estimatedValue == null
+                              ? '—'
+                              : '${current.estimatedValue!.toStringAsFixed(2)} €',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextButton.icon(
+                  onPressed: () => _delete(context, current),
+                  icon: const Icon(Icons.delete_outline),
+                  label: const Text('UKLONI ZAPIS'),
+                  style: TextButton.styleFrom(foregroundColor: Colors.grey),
+                ),
+              ],
+            ),
+          ],
         ),
-        Text(
-          comic.title,
-          textAlign: TextAlign.center,
-          style: const TextStyle(fontSize: 18, color: tan),
-        ),
-        const SizedBox(height: 20),
-        DetailRow('Edicija', comic.edition),
-        DetailRow('Izdavač', comic.publisher),
-        DetailRow('Godina', comic.year?.toString() ?? '—'),
-        DetailRow('Stanje', comic.condition),
-        DetailRow('Imam', comic.owned ? 'Da' : 'Ne'),
-        DetailRow('Pročitano', comic.read ? 'Da' : 'Ne'),
-        DetailRow(
-          'Vrijednost',
-          comic.estimatedValue == null
-              ? '—'
-              : '${comic.estimatedValue!.toStringAsFixed(2)} €',
-        ),
-        if (comic.loanedTo.isNotEmpty) DetailRow('Posuđeno', comic.loanedTo),
-        if (comic.notes.isNotEmpty) DetailRow('Bilješke', comic.notes),
-      ],
-    ),
+      );
+    },
   );
-  Future<void> _delete(BuildContext context) async {
+  Future<void> _delete(BuildContext context, Comic selected) async {
     final yes =
         await showDialog<bool>(
           context: context,
@@ -738,9 +940,107 @@ class ComicDetail extends StatelessWidget {
         ) ??
         false;
     if (yes) {
-      await controller.remove(comic);
+      await controller.remove(selected);
       if (context.mounted) Navigator.pop(context);
     }
+  }
+}
+
+class _GrungeBackground extends StatelessWidget {
+  const _GrungeBackground();
+  @override
+  Widget build(BuildContext context) => DecoratedBox(
+    decoration: const BoxDecoration(
+      gradient: RadialGradient(
+        center: Alignment(-.8, -.9),
+        radius: 1.2,
+        colors: [Color(0x332D0B08), Colors.transparent],
+      ),
+    ),
+  );
+}
+
+class _IssueStep extends StatelessWidget {
+  const _IssueStep({
+    required this.label,
+    required this.comic,
+    required this.controller,
+    this.right = false,
+  });
+  final String label;
+  final Comic? comic;
+  final AppController controller;
+  final bool right;
+  @override
+  Widget build(BuildContext context) => Column(
+    crossAxisAlignment: right
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start,
+    children: [
+      Text(label, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      const SizedBox(height: 6),
+      SizedBox(
+        width: double.infinity,
+        child: OutlinedButton(
+          onPressed: comic == null
+              ? null
+              : () => Navigator.pushReplacement(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) =>
+                        ComicDetail(comic: comic!, controller: controller),
+                  ),
+                ),
+          style: OutlinedButton.styleFrom(
+            alignment: right ? Alignment.centerRight : Alignment.centerLeft,
+            foregroundColor: Colors.white,
+            side: BorderSide(color: tan.withValues(alpha: .16)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          child: Text(
+            comic == null ? '—' : '#${comic!.number} ${comic!.title}',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontSize: 12.5),
+          ),
+        ),
+      ),
+    ],
+  );
+}
+
+class _StatusAction extends StatelessWidget {
+  const _StatusAction({
+    required this.active,
+    required this.icon,
+    required this.activeLabel,
+    required this.inactiveLabel,
+    required this.onTap,
+  });
+  final bool active;
+  final IconData icon;
+  final String activeLabel, inactiveLabel;
+  final VoidCallback? onTap;
+  @override
+  Widget build(BuildContext context) {
+    final color = active ? const Color(0xFF3EC63E) : red;
+    return OutlinedButton.icon(
+      onPressed: onTap,
+      icon: Icon(icon, size: 16),
+      label: Text(
+        active ? activeLabel : inactiveLabel,
+        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800),
+      ),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: color,
+        backgroundColor: color.withValues(alpha: .13),
+        side: BorderSide(color: color.withValues(alpha: .65)),
+        padding: const EdgeInsets.symmetric(vertical: 13),
+        shape: const StadiumBorder(),
+      ),
+    );
   }
 }
 
