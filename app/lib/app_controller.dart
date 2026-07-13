@@ -16,22 +16,35 @@ class AppController extends ChangeNotifier {
   bool loading = true;
   bool syncing = false;
   bool online = false;
+  String? startupError;
   String syncMessage = 'Lokalna pohrana';
   Timer? _timer;
 
   Future<void> init() async {
-    await catalog.load();
-    await _seedStarterCatalog();
-    final mappings = await db.barcodeMappings();
-    for (final entry in mappings.entries) {
-      final issue = catalog.byId(entry.value);
-      if (issue != null) catalog.registerBarcode(entry.key, issue);
-    }
-    comics = await db.all();
-    loading = false;
+    loading = true;
+    startupError = null;
     notifyListeners();
-    unawaited(sync());
-    _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
+    try {
+      await catalog.load();
+      await _seedStarterCatalog();
+      final mappings = await db.barcodeMappings();
+      for (final entry in mappings.entries) {
+        final issue = catalog.byId(entry.value);
+        if (issue != null) catalog.registerBarcode(entry.key, issue);
+      }
+      comics = await db.all();
+      unawaited(sync());
+      _timer?.cancel();
+      _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
+    } on Object catch (error, stackTrace) {
+      startupError = error.toString();
+      syncMessage = 'Greška lokalnih podataka';
+      debugPrint('Pokretanje aplikacije nije uspjelo: $error');
+      debugPrintStack(stackTrace: stackTrace);
+    } finally {
+      loading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> _seedStarterCatalog() async {

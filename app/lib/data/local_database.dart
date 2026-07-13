@@ -84,8 +84,9 @@ class LocalDatabase {
   Future<void> upsertCatalogAll(Iterable<Comic> comics) async {
     final db = await database;
     await db.transaction((txn) async {
+      final batch = txn.batch();
       for (final comic in comics) {
-        await txn.rawInsert(
+        batch.rawInsert(
           '''INSERT INTO comics(
             id, series, edition, number, title, publisher, year, owned,
             is_read, condition_grade, purchase_price, estimated_value,
@@ -121,6 +122,7 @@ class LocalDatabase {
           ],
         );
       }
+      await batch.commit(noResult: true);
     });
   }
 

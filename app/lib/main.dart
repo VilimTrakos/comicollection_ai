@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -10,11 +12,13 @@ const ink = Color(0xFF131412);
 const surface = Color(0xFF1C1D1B);
 const tan = Color(0xFFB7A88F);
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
   final controller = AppController();
-  await controller.init();
   runApp(ComicollectApp(controller: controller));
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    unawaited(controller.init());
+  });
 }
 
 class ComicollectApp extends StatelessWidget {
@@ -517,6 +521,8 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
         body: SafeArea(
           child: widget.controller.loading
               ? const Center(child: CircularProgressIndicator())
+              : widget.controller.startupError != null
+              ? _StartupError(controller: widget.controller)
               : IndexedStack(index: index, children: pages),
         ),
         floatingActionButton: FloatingActionButton(
@@ -564,6 +570,43 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
             ),
           ],
         ),
+      ),
+    ),
+  );
+}
+
+class _StartupError extends StatelessWidget {
+  const _StartupError({required this.controller});
+
+  final AppController controller;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: SingleChildScrollView(
+      padding: const EdgeInsets.all(28),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.storage_outlined, color: red, size: 54),
+          const SizedBox(height: 14),
+          const Text(
+            'LOKALNI PODACI SE NE MOGU OTVORITI',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            controller.startupError!,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: tan, fontSize: 12),
+          ),
+          const SizedBox(height: 18),
+          FilledButton.icon(
+            onPressed: controller.init,
+            icon: const Icon(Icons.refresh),
+            label: const Text('POKUŠAJ PONOVNO'),
+          ),
+        ],
       ),
     ),
   );
