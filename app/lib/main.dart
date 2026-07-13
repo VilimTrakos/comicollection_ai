@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'app_controller.dart';
 import 'models/comic.dart';
+import 'screens/smart_scanner_page.dart';
 
 const red = Color(0xFFC6291E);
 const ink = Color(0xFF131412);
@@ -428,15 +429,16 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
               const SizedBox(height: 12),
               _AddOption(
                 icon: Icons.qr_code_scanner,
-                title: 'Skeniraj barkod',
-                subtitle: 'Najbrži način — uperi u stražnju koricu',
+                title: 'Pametno skeniranje',
+                subtitle: 'Automatski prepoznaje barkod ili naslovnicu',
                 primary: true,
                 onTap: () {
                   Navigator.pop(sheetContext);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (_) => const _ScannerPlaceholder(),
+                      builder: (_) =>
+                          SmartScannerPage(controller: widget.controller),
                     ),
                   );
                 },
@@ -633,53 +635,6 @@ class _AddOption extends StatelessWidget {
           ),
         ),
       ),
-    ),
-  );
-}
-
-class _ScannerPlaceholder extends StatelessWidget {
-  const _ScannerPlaceholder();
-  @override
-  Widget build(BuildContext context) => Scaffold(
-    backgroundColor: Colors.black,
-    appBar: AppBar(
-      backgroundColor: Colors.transparent,
-      title: const Text(
-        'BRZO SKENIRANJE',
-        style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900),
-      ),
-    ),
-    body: Stack(
-      children: [
-        const Positioned.fill(child: ColoredBox(color: Color(0xFF080909))),
-        Center(
-          child: Container(
-            width: 270,
-            height: 180,
-            decoration: BoxDecoration(
-              border: Border.all(color: red, width: 3),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: const Center(
-              child: Icon(
-                Icons.qr_code_scanner,
-                size: 72,
-                color: Colors.white54,
-              ),
-            ),
-          ),
-        ),
-        const Positioned(
-          left: 30,
-          right: 30,
-          bottom: 70,
-          child: Text(
-            'Uperi kameru u barkod. Demo način nema aktivnu kameru.',
-            textAlign: TextAlign.center,
-            style: TextStyle(color: Colors.white70),
-          ),
-        ),
-      ],
     ),
   );
 }
@@ -905,6 +860,7 @@ class _ProgressRow extends StatelessWidget {
                   child: ComicCover(
                     label: name.split(' · ').first,
                     seed: name.hashCode,
+                    assetPath: comics.first.coverAsset,
                   ),
                 ),
               ),
@@ -1112,6 +1068,7 @@ class SeriesPage extends StatelessWidget {
                               child: ComicCover(
                                 label: name,
                                 seed: entry.key.hashCode,
+                                assetPath: issues.first.coverAsset,
                               ),
                             ),
                           ),
@@ -1403,6 +1360,7 @@ class ComicTile extends StatelessWidget {
                 child: ComicCover(
                   label: '#${comic.number}',
                   seed: comic.series.hashCode + comic.number,
+                  assetPath: comic.coverAsset,
                 ),
               ),
             ),
@@ -1525,6 +1483,7 @@ class ComicDetail extends StatelessWidget {
                         child: ComicCover(
                           label: '${current.series}\n#${current.number}',
                           seed: current.series.hashCode + current.number,
+                          assetPath: current.coverAsset,
                         ),
                       ),
                     ),
@@ -2212,11 +2171,29 @@ class _SettingsPageState extends State<SettingsPage> {
 }
 
 class ComicCover extends StatelessWidget {
-  const ComicCover({super.key, required this.label, required this.seed});
+  const ComicCover({
+    super.key,
+    required this.label,
+    required this.seed,
+    this.assetPath = '',
+  });
   final String label;
   final int seed;
+  final String assetPath;
   @override
   Widget build(BuildContext context) {
+    if (assetPath.isNotEmpty) {
+      return Image.asset(
+        assetPath,
+        fit: BoxFit.cover,
+        filterQuality: FilterQuality.medium,
+        errorBuilder: (_, _, _) => _placeholder(),
+      );
+    }
+    return _placeholder();
+  }
+
+  Widget _placeholder() {
     const colors = [
       Color(0xFFB5281E),
       Color(0xFF1F5FA8),

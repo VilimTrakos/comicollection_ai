@@ -3,11 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'data/local_database.dart';
+import 'data/catalog_repository.dart';
 import 'data/sync_service.dart';
 import 'models/comic.dart';
+import 'models/catalog_issue.dart';
 
 class AppController extends ChangeNotifier {
   final db = LocalDatabase();
+  final catalog = CatalogRepository();
   late final SyncService syncService = SyncService(db);
   List<Comic> comics = [];
   bool loading = true;
@@ -17,7 +20,13 @@ class AppController extends ChangeNotifier {
   Timer? _timer;
 
   Future<void> init() async {
+    await catalog.load();
     await _seedStarterCatalog();
+    final mappings = await db.barcodeMappings();
+    for (final entry in mappings.entries) {
+      final issue = catalog.byId(entry.value);
+      if (issue != null) catalog.registerBarcode(entry.key, issue);
+    }
     comics = await db.all();
     loading = false;
     notifyListeners();
@@ -27,7 +36,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _seedStarterCatalog() async {
     final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('starter_catalog_v1') ?? false) return;
+    if (prefs.getBool('starter_catalog_v2') ?? false) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     final issues = <Comic>[];
 
@@ -95,8 +104,11 @@ class AppController extends ChangeNotifier {
       firstYear: 2002,
     );
 
-    await db.upsertAll(issues);
+    issues.addAll(catalog.issues.map((issue) => issue.toComic()));
+
+    await db.upsertCatalogAll(issues);
     await prefs.setBool('starter_catalog_v1', true);
+    await prefs.setBool('starter_catalog_v2', true);
   }
 
   Future<void> save(Comic comic) async {
@@ -106,6 +118,30 @@ class AppController extends ChangeNotifier {
     await db.upsert(fresh);
     await reload();
     unawaited(sync());
+  }
+
+  Future<void> saveScanResults(Map<CatalogIssue, bool> results) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final currentById = {for (final comic in comics) comic.id: comic};
+    final changes = <Comic>[];
+    for (final entry in results.entries) {
+      final existing = currentById[entry.key.id] ?? entry.key.toComic();
+      changes.add(
+        existing.copyWith(
+          owned: entry.value,
+          coverAsset: entry.key.coverAsset ?? existing.coverAsset,
+          updatedAt: now,
+        ),
+      );
+    }
+    await db.replaceAll(changes);
+    await reload();
+    unawaited(sync());
+  }
+
+  Future<void> linkBarcode(String barcode, CatalogIssue issue) async {
+    await db.saveBarcodeMapping(barcode.trim(), issue.id);
+    catalog.registerBarcode(barcode, issue);
   }
 
   Future<void> add({

@@ -15,6 +15,7 @@ class Comic {
     this.duplicate = false,
     this.loanedTo = '',
     this.notes = '',
+    this.coverAsset = '',
     this.deleted = false,
     required this.updatedAt,
   });
@@ -34,6 +35,7 @@ class Comic {
   final bool duplicate;
   final String loanedTo;
   final String notes;
+  final String coverAsset;
   final bool deleted;
   final int updatedAt;
 
@@ -52,6 +54,7 @@ class Comic {
     bool? duplicate,
     String? loanedTo,
     String? notes,
+    String? coverAsset,
     bool? deleted,
     int? updatedAt,
   }) => Comic(
@@ -70,6 +73,7 @@ class Comic {
     duplicate: duplicate ?? this.duplicate,
     loanedTo: loanedTo ?? this.loanedTo,
     notes: notes ?? this.notes,
+    coverAsset: coverAsset ?? this.coverAsset,
     deleted: deleted ?? this.deleted,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -90,6 +94,7 @@ class Comic {
     'is_duplicate': duplicate ? 1 : 0,
     'loaned_to': loanedTo,
     'notes': notes,
+    'cover_asset': coverAsset,
     'deleted': deleted ? 1 : 0,
     'updated_at': updatedAt,
   };
@@ -112,6 +117,7 @@ class Comic {
     duplicate: (m['is_duplicate'] as num? ?? 0) != 0,
     loanedTo: (m['loaned_to'] ?? '') as String,
     notes: (m['notes'] ?? '') as String,
+    coverAsset: (m['cover_asset'] ?? '') as String,
     deleted: (m['deleted'] as num? ?? 0) != 0,
     updatedAt: (m['updated_at'] as num).toInt(),
   );

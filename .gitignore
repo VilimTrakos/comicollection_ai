@@ -17,3 +17,6 @@ app/**/*.g.dart.bak
 .idea/
 .vscode/
 *.iml
+
+# Locally downloaded catalog source images; never bundle or commit these.
+.catalog_cache/

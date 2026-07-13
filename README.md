@@ -10,6 +10,9 @@ Pi dostupan na kućnoj mreži.
 - Android Flutter aplikacija u `app/` (nije web wrapper)
 - dashboard, polica po serijalima, pretraga i detalji izdanja
 - dodavanje, uređivanje i sinkronizirano brisanje
+- pametno skeniranje: automatski barkod i naslovnica, ručna fotografija police
+- lokalno OCR čitanje hrptova te pregled i skupno označavanje imam/nemam
+- BSP testni katalog i komprimirane WebP naslovnice ugrađene u aplikaciju
 - imam/pročitano, M/VF/F/G/P, cijena/vrijednost, dupli, posuđeno i bilješke
 - lokalna SQLite baza i CSV izvoz u međuspremnik
 - tokenom zaštićen incremental sync s pravilom "novija promjena pobjeđuje"
@@ -88,3 +91,32 @@ cd ../server && python3 -m unittest -v test_server.py
 Originalni dizajn ostaje u `prototype/` kao vizualna referenca. Implementacija
 koristi njegovu near-black/crvenu/tan paletu, cover placeholder stil i centralni
 FAB navigation pattern.
+
+## Testni BSP katalog
+
+Tekstualni podaci za testiranje mogu se obnoviti iz javnih BSP popisa. Izvorni
+veliki JPEG-ovi spremaju se samo u lokalni, gitignorirani `.catalog_cache/`; ne
+ulaze u APK ni repozitorij:
+
+```bash
+python3 tools/import_bsp_catalog.py --download-covers
+```
+
+Importer pri ponovnom pokretanju koristi spremljeni HTML. Dodaj `--refresh`
+kad želiš ponovno dohvatiti aktualne BSP popise.
+
+Mali JSON pogodan za aplikaciju nalazi se u
+`app/assets/catalog/bsp_catalog.json`. Razvojni JPEG cache pretvara se u WebP
+Flutter assete pomoću `tools/build_cover_assets.py`. U APK ulaze komprimirane
+slike 240x320, tekst kataloga i unaprijed izračunati vizualni potpisi. Aplikacija
+ih prikazuje i koristi za prepoznavanje bez pristupa mreži; tijekom rada ništa
+ne dohvaća s BSP-a. Izvorni veliki JPEG-ovi ostaju izvan repozitorija.
+
+Prije javne distribucije naslovnica treba dogovoriti pravo korištenja s
+vlasnikom izvora.
+
+Ako su `cwebp` i `dwebp` instalirani u sustavu:
+
+```bash
+python3 tools/build_cover_assets.py --cwebp cwebp --dwebp dwebp
+```

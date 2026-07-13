@@ -38,6 +38,11 @@ dependencies:
   path: ^1.9.1
   shared_preferences: ^2.5.3
   uuid: ^4.5.1
+  camera: ^0.12.0+1
+  google_mlkit_barcode_scanning: ^0.15.0
+  google_mlkit_commons: ^0.12.0
+  google_mlkit_text_recognition: ^0.16.0
+  image: ^4.9.1
 
 dev_dependencies:
   flutter_test:
@@ -60,6 +65,11 @@ flutter:
   # included with your application, so that you can use the icons in
   # the material Icons class.
   uses-material-design: true
+
+  assets:
+    - assets/catalog/bsp_catalog.json
+    - assets/catalog/covers/ddlu/
+    - assets/catalog/covers/dslu/
 
   # To add assets to your application, add an assets section, like this:
   # assets:
