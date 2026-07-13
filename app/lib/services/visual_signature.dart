@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img;
 
 class FrameSignature {
   const FrameSignature({
@@ -26,6 +27,37 @@ class FrameSignature {
 
 class VisualSignatureExtractor {
   const VisualSignatureExtractor._();
+
+  static FrameSignature fromImage(img.Image source) {
+    final image = img.bakeOrientation(source);
+    final width = image.width;
+    final height = image.height;
+    const targetAspect = 3 / 4;
+    final currentAspect = width / height;
+    final cropWidth = currentAspect > targetAspect
+        ? height * targetAspect
+        : width.toDouble();
+    final cropHeight = currentAspect > targetAspect
+        ? height.toDouble()
+        : width / targetAspect;
+    final cropLeft = (width - cropWidth) / 2;
+    final cropTop = (height - cropHeight) / 2;
+
+    ({int r, int g, int b}) sample(int gridX, int gridY) {
+      final x = (cropLeft + cropWidth * gridX / 8)
+          .round()
+          .clamp(0, width - 1)
+          .toInt();
+      final y = (cropTop + cropHeight * gridY / 7)
+          .round()
+          .clamp(0, height - 1)
+          .toInt();
+      final pixel = image.getPixel(x, y);
+      return (r: pixel.r.toInt(), g: pixel.g.toInt(), b: pixel.b.toInt());
+    }
+
+    return _buildSignature(sample);
+  }
 
   static FrameSignature fromNv21(
     CameraImage image, {
@@ -85,6 +117,12 @@ class VisualSignatureExtractor {
       return _nv21Pixel(bytes, rawWidth, rawHeight, rawX, rawY);
     }
 
+    return _buildSignature(sample);
+  }
+
+  static FrameSignature _buildSignature(
+    ({int r, int g, int b}) Function(int gridX, int gridY) sample,
+  ) {
     final pixels = <({int r, int g, int b})>[];
     for (var y = 0; y < 8; y++) {
       for (var x = 0; x < 9; x++) {

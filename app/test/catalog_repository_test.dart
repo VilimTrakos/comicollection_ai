@@ -1,5 +1,8 @@
 import 'package:comicollect/data/catalog_repository.dart';
+import 'package:comicollect/services/visual_signature.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -28,5 +31,22 @@ void main() {
 
     final matches = catalog.matchText('DYLAN DOG 66');
     expect(matches.first.id, 'catalog-DDLU-66');
+  });
+
+  test('cover loaded from gallery matches its bundled catalog issue', () async {
+    final catalog = CatalogRepository();
+    await catalog.load();
+    final bytes = await rootBundle.load('assets/catalog/covers/ddlu/0061.webp');
+    final image = img.decodeImage(bytes.buffer.asUint8List());
+
+    expect(image, isNotNull);
+    final signature = VisualSignatureExtractor.fromImage(image!);
+    final matches = catalog.matchVisual(
+      visualHash: signature.visualHash,
+      colorSignature: signature.colorSignature,
+    );
+
+    expect(matches.first.issue.id, 'catalog-DDLU-61');
+    expect(matches.first.score, greaterThan(.70));
   });
 }

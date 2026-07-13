@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 
 import '../app_controller.dart';
 import '../data/catalog_repository.dart';
@@ -47,6 +48,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
   final TextRecognizer _textRecognizer = TextRecognizer(
     script: TextRecognitionScript.latin,
   );
+  final ImagePicker _imagePicker = ImagePicker();
 
   CameraController? _camera;
   CameraDescription? _description;
@@ -68,6 +70,17 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     unawaited(_initializeCamera());
+    unawaited(_restoreLostGalleryImage());
+  }
+
+  Future<void> _restoreLostGalleryImage() async {
+    try {
+      final response = await _imagePicker.retrieveLostData();
+      final file = response.files?.firstOrNull;
+      if (file != null) await _processGalleryImage(file);
+    } on Object {
+      // Ako Android nije sačuvao odabir, skener normalno nastavlja raditi.
+    }
   }
 
   Future<void> _initializeCamera([CameraDescription? preferred]) async {
@@ -275,6 +288,68 @@ class _SmartScannerPageState extends State<SmartScannerPage>
         }
       }
     }
+  }
+
+  Future<void> _pickFromGallery() async {
+    if (_capturingShelf) return;
+    if (mounted) {
+      setState(() {
+        _capturingShelf = true;
+        _message = 'Odaberi naslovnicu ili fotografiju police…';
+      });
+    }
+    try {
+      final photo = await _imagePicker.pickImage(
+        source: ImageSource.gallery,
+        requestFullMetadata: false,
+      );
+      if (photo == null) {
+        if (mounted) setState(() => _message = 'Odabir slike je otkazan');
+        return;
+      }
+      await _processGalleryImage(photo);
+    } on Object catch (error) {
+      if (mounted) {
+        setState(() => _message = 'Slika iz galerije nije obrađena: $error');
+      }
+    } finally {
+      if (mounted) setState(() => _capturingShelf = false);
+    }
+  }
+
+  Future<void> _processGalleryImage(XFile photo) async {
+    if (!mounted) return;
+    setState(() => _message = 'Prepoznajem sadržaj slike…');
+    final found = <String, CatalogIssue>{};
+    final decoded = img.decodeImage(await photo.readAsBytes());
+    if (decoded != null) {
+      final signature = VisualSignatureExtractor.fromImage(decoded);
+      final matches = widget.controller.catalog.matchVisual(
+        visualHash: signature.visualHash,
+        colorSignature: signature.colorSignature,
+      );
+      if (matches.isNotEmpty) {
+        final best = matches.first;
+        final margin = matches.length < 2 ? 1.0 : best.score - matches[1].score;
+        if (best.score >= .70 && (margin >= .018 || best.score >= .82)) {
+          found[best.issue.id] = best.issue;
+        }
+      }
+    }
+
+    for (final issue in await _recognizeShelf(photo.path)) {
+      found[issue.id] = issue;
+    }
+    for (final issue in found.values) {
+      if (_scanned.every((item) => item.id != issue.id)) _scanned.add(issue);
+    }
+    if (!mounted) return;
+    setState(() {
+      _message = found.isEmpty
+          ? 'Nisam pouzdano prepoznao stripove na odabranoj slici'
+          : 'Iz galerije pronađeno ${found.length} stripova';
+    });
+    if (found.isNotEmpty) await _openReview();
   }
 
   Future<void> _linkPendingBarcode() async {
@@ -570,8 +645,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
                       label: const Text('POVEŽI NEPOZNATI BARKOD'),
                     ),
                   ),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
+                Column(
                   children: [
                     FilledButton.icon(
                       onPressed: _capturingShelf ? null : _captureShelf,
@@ -582,6 +656,12 @@ class _SmartScannerPageState extends State<SmartScannerPage>
                             )
                           : const Icon(Icons.photo_camera_outlined),
                       label: const Text('FOTOGRAFIRAJ POLICU'),
+                    ),
+                    const SizedBox(height: 6),
+                    TextButton.icon(
+                      onPressed: _capturingShelf ? null : _pickFromGallery,
+                      icon: const Icon(Icons.photo_library_outlined),
+                      label: const Text('UČITAJ IZ GALERIJE'),
                     ),
                   ],
                 ),
