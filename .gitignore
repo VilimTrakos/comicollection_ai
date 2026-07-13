@@ -1,6 +1,8 @@
 # Logs / OS
 *.log
 .DS_Store
+__pycache__/
+*.pyc
 
 # Flutter / Dart (app/)
 app/.dart_tool/

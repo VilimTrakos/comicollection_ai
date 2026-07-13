@@ -12,7 +12,7 @@ Pi dostupan na kućnoj mreži.
 - dodavanje, uređivanje i sinkronizirano brisanje
 - pametno skeniranje: automatski barkod i naslovnica, ručna fotografija police
 - lokalno OCR čitanje hrptova te pregled i skupno označavanje imam/nemam
-- BSP testni katalog i komprimirane WebP naslovnice ugrađene u aplikaciju
+- BSP DDLU, DSLU i DMLU testni katalog te komprimirane WebP naslovnice ugrađene u aplikaciju
 - imam/pročitano, M/VF/F/G/P, cijena/vrijednost, dupli, posuđeno i bilješke
 - lokalna SQLite baza i CSV izvoz u međuspremnik
 - tokenom zaštićen incremental sync s pravilom "novija promjena pobjeđuje"

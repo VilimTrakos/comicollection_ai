@@ -1005,11 +1005,8 @@ class ShelfPage extends StatelessWidget {
           onTap: () => Navigator.push(
             context,
             MaterialPageRoute(
-              builder: (_) => SeriesPage(
-                name: names[i],
-                comics: items,
-                controller: controller,
-              ),
+              builder: (_) =>
+                  SeriesPage(name: names[i], controller: controller),
             ),
           ),
           child: Card(
@@ -1052,144 +1049,145 @@ class ShelfPage extends StatelessWidget {
 }
 
 class SeriesPage extends StatelessWidget {
-  const SeriesPage({
-    super.key,
-    required this.name,
-    required this.comics,
-    required this.controller,
-  });
+  const SeriesPage({super.key, required this.name, required this.controller});
   final String name;
-  final List<Comic> comics;
   final AppController controller;
   @override
-  Widget build(BuildContext context) {
-    final editions = <String, List<Comic>>{};
-    for (final comic in comics) {
-      editions.putIfAbsent(comic.edition, () => []).add(comic);
-    }
-    return Scaffold(
-      appBar: AppBar(
-        centerTitle: true,
-        title: Text(
-          name.toUpperCase(),
-          style: const TextStyle(
-            color: red,
-            fontSize: 28,
-            fontWeight: FontWeight.w900,
-            letterSpacing: 1,
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller,
+    builder: (context, _) {
+      final editions = <String, List<Comic>>{};
+      for (final comic in controller.comics.where(
+        (comic) => comic.series == name,
+      )) {
+        editions.putIfAbsent(comic.edition, () => []).add(comic);
+      }
+      return Scaffold(
+        appBar: AppBar(
+          centerTitle: true,
+          title: Text(
+            name.toUpperCase(),
+            style: const TextStyle(
+              color: red,
+              fontSize: 28,
+              fontWeight: FontWeight.w900,
+              letterSpacing: 1,
+            ),
           ),
         ),
-      ),
-      body: Stack(
-        children: [
-          const Positioned.fill(child: _GrungeBackground()),
-          ListView(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
-            children: editions.entries.map((entry) {
-              final issues = entry.value
-                ..sort((a, b) => a.number.compareTo(b.number));
-              final owned = issues.where((c) => c.owned).length;
-              final publisher = issues.first.publisher;
-              final progress = issues.isEmpty ? 0.0 : owned / issues.length;
-              return Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Card(
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(
-                        builder: (_) => EditionPage(
-                          series: name,
-                          edition: entry.key,
-                          comics: issues,
-                          controller: controller,
+        body: Stack(
+          children: [
+            const Positioned.fill(child: _GrungeBackground()),
+            ListView(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
+              children: editions.entries.map((entry) {
+                final issues = entry.value
+                  ..sort((a, b) => a.number.compareTo(b.number));
+                final owned = issues.where((c) => c.owned).length;
+                final publisher = issues.first.publisher;
+                final progress = issues.isEmpty ? 0.0 : owned / issues.length;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Card(
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: () => Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => EditionPage(
+                            series: name,
+                            edition: entry.key,
+                            comics: issues,
+                            controller: controller,
+                          ),
+                        ),
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 58,
+                              height: 78,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(8),
+                                child: ComicCover(
+                                  label: name,
+                                  seed: entry.key.hashCode,
+                                  assetPath: issues.first.coverAsset,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 14),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    publisher,
+                                    style: const TextStyle(
+                                      color: tan,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    entry.key.toUpperCase(),
+                                    style: const TextStyle(
+                                      fontSize: 19,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: .5,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 9),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(
+                                            99,
+                                          ),
+                                          child: LinearProgressIndicator(
+                                            value: progress,
+                                            minHeight: 6,
+                                            backgroundColor: const Color(
+                                              0xFF080909,
+                                            ),
+                                            color: red,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 9),
+                                      Text(
+                                        '$owned/${issues.length}',
+                                        style: const TextStyle(
+                                          color: tan,
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(Icons.play_arrow, color: red, size: 18),
+                          ],
                         ),
                       ),
                     ),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: Row(
-                        children: [
-                          SizedBox(
-                            width: 58,
-                            height: 78,
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: ComicCover(
-                                label: name,
-                                seed: entry.key.hashCode,
-                                assetPath: issues.first.coverAsset,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  publisher,
-                                  style: const TextStyle(
-                                    color: tan,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                                const SizedBox(height: 3),
-                                Text(
-                                  entry.key.toUpperCase(),
-                                  style: const TextStyle(
-                                    fontSize: 19,
-                                    fontWeight: FontWeight.w900,
-                                    letterSpacing: .5,
-                                  ),
-                                ),
-                                const SizedBox(height: 9),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: ClipRRect(
-                                        borderRadius: BorderRadius.circular(99),
-                                        child: LinearProgressIndicator(
-                                          value: progress,
-                                          minHeight: 6,
-                                          backgroundColor: const Color(
-                                            0xFF080909,
-                                          ),
-                                          color: red,
-                                        ),
-                                      ),
-                                    ),
-                                    const SizedBox(width: 9),
-                                    Text(
-                                      '$owned/${issues.length}',
-                                      style: const TextStyle(
-                                        color: tan,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Icon(Icons.play_arrow, color: red, size: 18),
-                        ],
-                      ),
-                    ),
                   ),
-                ),
-              );
-            }).toList(),
-          ),
-        ],
-      ),
-    );
-  }
+                );
+              }).toList(),
+            ),
+          ],
+        ),
+      );
+    },
+  );
 }
 
 class EditionPage extends StatefulWidget {

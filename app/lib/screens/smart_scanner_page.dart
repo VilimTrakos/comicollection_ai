@@ -63,6 +63,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
   FrameSignature? _lockedSignature;
   String? _lastUnknownBarcode;
   String? _pendingBarcode;
+  bool _oldBoyNeedsSelection = false;
   final List<CatalogIssue> _scanned = [];
 
   @override
@@ -273,7 +274,9 @@ class _SmartScannerPageState extends State<SmartScannerPage>
       if (!mounted) return;
       setState(() {
         _message = issues.isEmpty
-            ? 'Nisam pouzdano pronašao brojeve — pokušaj bliže i bez odsjaja'
+            ? _oldBoyNeedsSelection
+                  ? 'Old Boy je vidljiv, ali broj ili naslov treba odabrati'
+                  : 'Nisam pouzdano pronašao brojeve — pokušaj bliže i bez odsjaja'
             : 'Pronađeno ${issues.length} stripova';
       });
       if (issues.isNotEmpty) await _openReview();
@@ -346,7 +349,11 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     if (!mounted) return;
     setState(() {
       _message = found.isEmpty
-          ? 'Nisam pouzdano prepoznao stripove na odabranoj slici'
+          ? _oldBoyNeedsSelection
+                ? 'Old Boy je vidljiv, ali broj ili naslov treba odabrati'
+                : 'Nisam pouzdano prepoznao stripove na odabranoj slici'
+          : _oldBoyNeedsSelection
+          ? 'Pronađeno ${found.length}; Old Boy treba ručno potvrditi'
           : 'Iz galerije pronađeno ${found.length} stripova';
     });
     if (found.isNotEmpty) await _openReview();
@@ -444,12 +451,19 @@ class _SmartScannerPageState extends State<SmartScannerPage>
           InputImage.fromFilePath(candidatePath),
         );
         for (final block in text.blocks) {
+          if (block.text.trim().isNotEmpty) lines.add(block.text.trim());
           for (final line in block.lines) {
             if (line.text.trim().isNotEmpty) lines.add(line.text.trim());
           }
         }
       }
-      return _catalogIssuesFromLines(lines);
+      final result = _catalogIssuesFromLines(lines);
+      final hasOldBoy = lines.any(
+        (line) => CatalogRepository.normalize(line).contains('OLD BOY'),
+      );
+      _oldBoyNeedsSelection =
+          hasOldBoy && !result.any((issue) => issue.sourceEdition == 'DMLU');
+      return result;
     } finally {
       for (final file in temporary) {
         unawaited(_deleteTemporaryFile(file));
@@ -478,18 +492,24 @@ class _SmartScannerPageState extends State<SmartScannerPage>
             found[candidates.first.id] = candidates.first;
           } else if (candidates.isNotEmpty) {
             final special = normalized.contains('SPECIJAL');
+            final maxi =
+                normalized.contains('MAXI') || normalized.contains('OLD BOY');
             final selected = candidates.firstWhere(
-              (issue) => issue.edition.contains('Specijal') == special,
+              (issue) => maxi
+                  ? issue.edition.contains('Maxi')
+                  : issue.edition.contains('Specijal') == special &&
+                        !issue.edition.contains('Maxi'),
               orElse: () => candidates.first,
             );
             found[selected.id] = selected;
           }
         }
       }
-      final textMatches = catalog.matchText(line, limit: 2);
-      for (final issue in textMatches) {
+      for (final issue in catalog.issues) {
         final title = CatalogRepository.normalize(issue.title);
-        if (title.length >= 5 && normalized.contains(title)) {
+        if (title.length >= 5 &&
+            (normalized.contains(title) ||
+                _containsFuzzyTitle(normalized, title))) {
           found[issue.id] = issue;
         }
       }
@@ -500,6 +520,117 @@ class _SmartScannerPageState extends State<SmartScannerPage>
         return edition != 0 ? edition : a.number.compareTo(b.number);
       });
     return result;
+  }
+
+  Future<void> _selectOldBoyIssue() async {
+    if (!mounted) return;
+    var query = '';
+    final issue = await showModalBottomSheet<CatalogIssue>(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) => StatefulBuilder(
+        builder: (context, setSheetState) {
+          final normalized = CatalogRepository.normalize(query);
+          final matches = widget.controller.catalog.issues.where((item) {
+            if (item.sourceEdition != 'DMLU') return false;
+            if (normalized.isEmpty) return true;
+            return CatalogRepository.normalize(
+              '${item.number} ${item.title}',
+            ).contains(normalized);
+          }).toList();
+          return SafeArea(
+            child: SizedBox(
+              height: MediaQuery.sizeOf(context).height * .78,
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: TextField(
+                      autofocus: true,
+                      keyboardType: TextInputType.text,
+                      onChanged: (value) => setSheetState(() => query = value),
+                      decoration: const InputDecoration(
+                        labelText: 'Broj ili naslov Maxi / Old Boy izdanja',
+                        prefixIcon: Icon(Icons.search),
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      itemCount: matches.length,
+                      itemBuilder: (context, index) {
+                        final item = matches[index];
+                        return ListTile(
+                          leading: item.coverAsset == null
+                              ? const Icon(Icons.menu_book)
+                              : Image.asset(
+                                  item.coverAsset!,
+                                  width: 38,
+                                  height: 52,
+                                  fit: BoxFit.cover,
+                                ),
+                          title: Text('Maxi #${item.number}'),
+                          subtitle: Text(item.title),
+                          onTap: () => Navigator.pop(sheetContext, item),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    if (issue == null) return;
+    _oldBoyNeedsSelection = false;
+    _accept(issue, 'Old Boy ručno potvrđen');
+  }
+
+  bool _containsFuzzyTitle(String text, String title) {
+    final textWords = text
+        .split(' ')
+        .where((word) => word.length >= 4)
+        .toList();
+    final titleWords = title
+        .split(' ')
+        .where((word) => word.length >= 4)
+        .toList();
+    if (textWords.isEmpty || titleWords.isEmpty) return false;
+    var matched = 0;
+    for (final expected in titleWords) {
+      if (textWords.any((actual) => _wordsAreClose(expected, actual))) {
+        matched++;
+      }
+    }
+    if (titleWords.length == 1) return matched == 1;
+    return matched >= 2 && matched / titleWords.length >= .6;
+  }
+
+  bool _wordsAreClose(String expected, String actual) {
+    if (expected == actual) return true;
+    final allowed = expected.length >= 9 ? 2 : 1;
+    if ((expected.length - actual.length).abs() > allowed) return false;
+    return _editDistance(expected, actual) <= allowed;
+  }
+
+  int _editDistance(String left, String right) {
+    var previous = List<int>.generate(right.length + 1, (index) => index);
+    for (var i = 0; i < left.length; i++) {
+      final current = <int>[i + 1];
+      for (var j = 0; j < right.length; j++) {
+        current.add(
+          [
+            current[j] + 1,
+            previous[j + 1] + 1,
+            previous[j] + (left.codeUnitAt(i) == right.codeUnitAt(j) ? 0 : 1),
+          ].reduce((a, b) => a < b ? a : b),
+        );
+      }
+      previous = current;
+    }
+    return previous.last;
   }
 
   Future<void> _openReview() async {
@@ -643,6 +774,15 @@ class _SmartScannerPageState extends State<SmartScannerPage>
                       onPressed: _linkPendingBarcode,
                       icon: const Icon(Icons.link),
                       label: const Text('POVEŽI NEPOZNATI BARKOD'),
+                    ),
+                  ),
+                if (_oldBoyNeedsSelection)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: OutlinedButton.icon(
+                      onPressed: _selectOldBoyIssue,
+                      icon: const Icon(Icons.auto_stories_outlined),
+                      label: const Text('ODABERI OLD BOY IZDANJE'),
                     ),
                   ),
                 Column(

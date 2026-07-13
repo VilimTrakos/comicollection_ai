@@ -11,7 +11,7 @@ void main() {
     final catalog = CatalogRepository();
     await catalog.load();
 
-    expect(catalog.issues, hasLength(190));
+    expect(catalog.issues, hasLength(228));
     final issue = catalog.byId('catalog-DDLU-61');
     expect(issue, isNotNull);
     expect(issue!.title, 'Nesmiljeni Hook');
@@ -48,5 +48,25 @@ void main() {
 
     expect(matches.first.issue.id, 'catalog-DDLU-61');
     expect(matches.first.score, greaterThan(.70));
+  });
+
+  test('bundled catalog includes Maxi and Old Boy issues', () async {
+    final catalog = CatalogRepository();
+    await catalog.load();
+
+    final oldBoy = catalog.byId('catalog-DMLU-25');
+    expect(oldBoy, isNotNull);
+    expect(oldBoy!.edition, 'Maxi (L)');
+    expect(oldBoy.title, 'Halloween Express');
+    expect(oldBoy.coverAsset, 'assets/catalog/covers/dmlu/0025.webp');
+
+    final bytes = await rootBundle.load(oldBoy.coverAsset!);
+    final image = img.decodeImage(bytes.buffer.asUint8List());
+    final signature = VisualSignatureExtractor.fromImage(image!);
+    final matches = catalog.matchVisual(
+      visualHash: signature.visualHash,
+      colorSignature: signature.colorSignature,
+    );
+    expect(matches.first.issue.id, oldBoy.id);
   });
 }

@@ -70,6 +70,7 @@ flutter:
   assets:
     - assets/catalog/bsp_catalog.json
     - assets/catalog/covers/ddlu/
+    - assets/catalog/covers/dmlu/
     - assets/catalog/covers/dslu/
 
   # To add assets to your application, add an assets section, like this:

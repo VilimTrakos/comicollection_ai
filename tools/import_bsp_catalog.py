@@ -19,7 +19,7 @@ from pathlib import Path
 
 
 BASE_URL = "https://skab612.com/"
-DEFAULT_EDITIONS = ("DDLU", "DSLU")
+DEFAULT_EDITIONS = ("DDLU", "DSLU", "DMLU")
 EDITION_METADATA = {
     "DDLU": {
         "series": "Dylan Dog",
@@ -29,6 +29,11 @@ EDITION_METADATA = {
     "DSLU": {
         "series": "Dylan Dog",
         "edition": "Specijal (L)",
+        "publisher": "Ludens",
+    },
+    "DMLU": {
+        "series": "Dylan Dog",
+        "edition": "Maxi (L)",
         "publisher": "Ludens",
     },
 }

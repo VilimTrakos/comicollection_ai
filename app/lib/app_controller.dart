@@ -49,7 +49,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> _seedStarterCatalog() async {
     final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('starter_catalog_v2') ?? false) return;
+    if (prefs.getBool('starter_catalog_v3') ?? false) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     final issues = <Comic>[];
 
@@ -122,14 +122,30 @@ class AppController extends ChangeNotifier {
     await db.upsertCatalogAll(issues);
     await prefs.setBool('starter_catalog_v1', true);
     await prefs.setBool('starter_catalog_v2', true);
+    await prefs.setBool('starter_catalog_v3', true);
   }
 
   Future<void> save(Comic comic) async {
     final fresh = comic.copyWith(
       updatedAt: DateTime.now().millisecondsSinceEpoch,
     );
-    await db.upsert(fresh);
-    await reload();
+    final next = List<Comic>.of(comics);
+    final index = next.indexWhere((item) => item.id == fresh.id);
+    if (fresh.deleted) {
+      next.removeWhere((item) => item.id == fresh.id);
+    } else if (index < 0) {
+      next.add(fresh);
+    } else {
+      next[index] = fresh;
+    }
+    comics = next;
+    notifyListeners();
+    try {
+      await db.upsert(fresh);
+    } on Object {
+      await reload();
+      rethrow;
+    }
     unawaited(sync());
   }
 
