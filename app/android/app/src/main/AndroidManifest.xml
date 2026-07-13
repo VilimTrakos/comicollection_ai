@@ -8,6 +8,11 @@
         android:name="${applicationName}"
         android:usesCleartextTraffic="true"
         android:icon="@mipmap/ic_launcher">
+        <!-- Impeller OpenGLES can render a permanent black surface on some
+             Android emulators. Skia is more reliable for this camera-heavy app. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

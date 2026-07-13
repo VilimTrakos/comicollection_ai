@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -14,9 +15,19 @@ const tan = Color(0xFFB7A88F);
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+  };
+  PlatformDispatcher.instance.onError = (error, stackTrace) {
+    debugPrint('Comicollect neobrađena startup greška: $error');
+    debugPrintStack(stackTrace: stackTrace);
+    return false;
+  };
+  debugPrint('Comicollect startup: main() je pokrenut');
   final controller = AppController();
   runApp(ComicollectApp(controller: controller));
   WidgetsBinding.instance.addPostFrameCallback((_) {
+    debugPrint('Comicollect startup: prvi Flutter frame je prikazan');
     unawaited(controller.init());
   });
 }
