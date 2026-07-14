@@ -114,6 +114,22 @@ void main() {
     expect(find.text('Test 1'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('condition-M')));
     await tester.pump();
+    expect(find.text('Test 1'), findsOneWidget);
+    final selectedMaterial = tester.widget<Material>(
+      find.descendant(
+        of: find.byKey(const ValueKey('condition-M')),
+        matching: find.byType(Material),
+      ),
+    );
+    expect(
+      selectedMaterial.color,
+      Theme.of(
+        tester.element(find.byKey(const ValueKey('condition-M'))),
+      ).colorScheme.primary,
+    );
+    await tester.pump(const Duration(milliseconds: 349));
+    expect(find.text('Test 1'), findsOneWidget);
+    await tester.pump(const Duration(milliseconds: 1));
     expect(find.text('Test 2'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('condition-next')));
@@ -124,7 +140,7 @@ void main() {
     expect(find.text('Test 2'), findsOneWidget);
 
     await tester.tap(find.byKey(const ValueKey('condition-VF')));
-    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 350));
     expect(find.text('Test 3'), findsOneWidget);
     await tester.tap(find.byKey(const ValueKey('condition-none')));
     await tester.pump();

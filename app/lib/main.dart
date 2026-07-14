@@ -3407,6 +3407,8 @@ class BatchConditionPage extends StatefulWidget {
 class _BatchConditionPageState extends State<BatchConditionPage> {
   late final List<String?> selections;
   int index = 0;
+  bool advancing = false;
+  Timer? advanceTimer;
 
   static const grades = ['M', 'VF', 'F', 'G', 'P'];
 
@@ -3419,6 +3421,12 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
           return grades.contains(comic.condition) ? comic.condition : null;
         })
         .toList(growable: false);
+  }
+
+  @override
+  void dispose() {
+    advanceTimer?.cancel();
+    super.dispose();
   }
 
   bool get done => index >= widget.comics.length;
@@ -3439,7 +3447,7 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
         IconButton(
           key: const ValueKey('condition-all-without'),
           tooltip: 'Dodaj sve bez stanja',
-          onPressed: _confirmAllWithoutCondition,
+          onPressed: advancing ? null : _confirmAllWithoutCondition,
           icon: const Icon(Icons.fast_forward_outlined),
         ),
       ],
@@ -3529,7 +3537,7 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
                           key: ValueKey('condition-$grade'),
                           grade: grade,
                           selected: selected == grade,
-                          onTap: () => _select(grade),
+                          onTap: advancing ? null : () => _selectGrade(grade),
                         ),
                       ),
                     ),
@@ -3541,7 +3549,7 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
               width: double.infinity,
               child: OutlinedButton.icon(
                 key: const ValueKey('condition-none'),
-                onPressed: () => _select(''),
+                onPressed: advancing ? null : _skipWithoutCondition,
                 icon: const Icon(Icons.remove_circle_outline, size: 17),
                 label: const Text('BEZ STANJA — PRESKOČI I NASTAVI'),
               ),
@@ -3552,7 +3560,7 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
                 Expanded(
                   child: TextButton.icon(
                     key: const ValueKey('condition-previous'),
-                    onPressed: index == 0 ? null : _previous,
+                    onPressed: index == 0 || advancing ? null : _previous,
                     icon: const Icon(Icons.arrow_back),
                     label: const Text('PRETHODNI'),
                   ),
@@ -3561,7 +3569,7 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
                 Expanded(
                   child: TextButton.icon(
                     key: const ValueKey('condition-next'),
-                    onPressed: _next,
+                    onPressed: advancing ? null : _next,
                     icon: const Icon(Icons.arrow_forward),
                     label: const Text('DALJE'),
                   ),
@@ -3630,9 +3638,26 @@ class _BatchConditionPageState extends State<BatchConditionPage> {
     );
   }
 
-  void _select(String grade) {
+  void _selectGrade(String grade) {
+    if (advancing) return;
+    HapticFeedback.selectionClick();
     setState(() {
       selections[index] = grade;
+      advancing = true;
+    });
+    advanceTimer?.cancel();
+    advanceTimer = Timer(const Duration(milliseconds: 350), () {
+      if (!mounted) return;
+      setState(() {
+        index++;
+        advancing = false;
+      });
+    });
+  }
+
+  void _skipWithoutCondition() {
+    setState(() {
+      selections[index] = '';
       index++;
     });
   }
@@ -3700,7 +3725,7 @@ class _ConditionChoice extends StatelessWidget {
 
   final String grade;
   final bool selected;
-  final VoidCallback onTap;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
