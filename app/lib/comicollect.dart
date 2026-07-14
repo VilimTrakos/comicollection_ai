@@ -1,6 +1,9 @@
 library;
 
 export 'app/comicollect_app.dart';
+export 'app_controller.dart';
+export 'data/collection_repository.dart';
+export 'data/settings_repository.dart';
 export 'features/auth/login_gate.dart';
 export 'features/collection/collection_export.dart';
 export 'features/collection/collection_list_page.dart';
@@ -18,5 +21,7 @@ export 'features/scanner/scan_review_page.dart';
 export 'features/scanner/smart_scanner_page.dart';
 export 'features/settings/settings_page.dart';
 export 'features/shell/app_shell.dart';
+export 'services/catalog_service.dart';
+export 'services/sync_coordinator.dart';
 export 'ui/app_theme.dart';
 export 'ui/common_widgets.dart';

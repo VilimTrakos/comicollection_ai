@@ -1,30 +1,86 @@
 import 'dart:async';
-import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
-import 'data/local_database.dart';
-import 'data/catalog_repository.dart';
-import 'data/sync_service.dart';
-import 'models/comic.dart';
-import 'models/catalog_issue.dart';
 
+import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
+
+import 'data/catalog_repository.dart';
+import 'data/collection_repository.dart';
+import 'data/local_database.dart';
+import 'data/settings_repository.dart';
+import 'data/sync_service.dart';
+import 'models/catalog_issue.dart';
+import 'models/comic.dart';
+import 'services/catalog_service.dart';
+import 'services/sync_coordinator.dart';
+
+/// UI-facing application state.
+///
+/// Persistence, preferences, catalogue bootstrapping and synchronization
+/// scheduling are delegated to dedicated collaborators. The public API stays
+/// intentionally small and backwards-compatible with existing widgets.
 class AppController extends ChangeNotifier {
   AppController({
     LocalDatabase? db,
     CatalogRepository? catalog,
     SyncService? syncService,
+    CollectionRepository? collectionRepository,
+    SettingsRepository? settingsRepository,
+    CatalogService? catalogService,
+    SyncCoordinator? syncCoordinator,
     int Function()? nowMilliseconds,
-  }) : db = db ?? LocalDatabase(),
-       catalog = catalog ?? CatalogRepository(),
-       _providedSyncService = syncService,
-       _nowMilliseconds =
-           nowMilliseconds ?? (() => DateTime.now().millisecondsSinceEpoch);
+    String Function()? idGenerator,
+    Duration syncInterval = const Duration(minutes: 5),
+  }) : _nowMilliseconds =
+           nowMilliseconds ?? (() => DateTime.now().millisecondsSinceEpoch),
+       _idGenerator = idGenerator ?? const Uuid().v4,
+       db =
+           db ??
+           collectionRepository?.database ??
+           catalogService?.collections.database ??
+           syncCoordinator?.collections.database ??
+           LocalDatabase(),
+       catalog = catalog ?? catalogService?.catalog ?? CatalogRepository() {
+    this.collectionRepository =
+        collectionRepository ??
+        catalogService?.collections ??
+        syncCoordinator?.collections ??
+        CollectionRepository(this.db);
+    this.settingsRepository =
+        settingsRepository ??
+        catalogService?.settings ??
+        syncCoordinator?.settings ??
+        const SettingsRepository();
+    this.catalogService =
+        catalogService ??
+        CatalogService(
+          catalog: this.catalog,
+          collections: this.collectionRepository,
+          settings: this.settingsRepository,
+          nowMilliseconds: _nowMilliseconds,
+        );
+    this.syncService =
+        syncService ?? syncCoordinator?.syncService ?? SyncService(this.db);
+    this.syncCoordinator =
+        syncCoordinator ??
+        SyncCoordinator(
+          syncService: this.syncService,
+          collections: this.collectionRepository,
+          settings: this.settingsRepository,
+          interval: syncInterval,
+        );
+  }
 
   final LocalDatabase db;
   final CatalogRepository catalog;
-  final SyncService? _providedSyncService;
   final int Function() _nowMilliseconds;
-  late final SyncService syncService = _providedSyncService ?? SyncService(db);
+  final String Function() _idGenerator;
+
+  late final CollectionRepository collectionRepository;
+  late final SettingsRepository settingsRepository;
+  late final CatalogService catalogService;
+  late final SyncService syncService;
+  late final SyncCoordinator syncCoordinator;
+
   List<Comic> comics = [];
   bool loading = true;
   bool syncing = false;
@@ -38,22 +94,15 @@ class AppController extends ChangeNotifier {
   bool autoSync = true;
   bool newIssueNotifications = true;
   DateTime? lastSyncAt;
-  Timer? _timer;
 
   Future<void> init() async {
     loading = true;
     startupError = null;
     notifyListeners();
     try {
-      await _loadPreferences();
-      await catalog.load();
-      await _seedStarterCatalog();
-      final mappings = await db.barcodeMappings();
-      for (final entry in mappings.entries) {
-        final issue = catalog.byId(entry.value);
-        if (issue != null) catalog.registerBarcode(entry.key, issue);
-      }
-      comics = await db.all();
+      _applySettings(await settingsRepository.load());
+      await catalogService.initialize();
+      comics = await collectionRepository.load();
       if (autoSync) unawaited(sync());
       _scheduleAutoSync();
     } on Object catch (error, stackTrace) {
@@ -67,99 +116,11 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> _seedStarterCatalog() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (prefs.getBool('starter_catalog_v3') ?? false) return;
-    final now = _nowMilliseconds();
-    final issues = <Comic>[];
-
-    void edition({
-      required String code,
-      required String name,
-      required String publisher,
-      required int first,
-      required int last,
-      int? firstYear,
-    }) {
-      for (var number = first; number <= last; number++) {
-        issues.add(
-          Comic(
-            id: 'catalog-$code-$number',
-            series: 'Dylan Dog',
-            edition: name,
-            number: number,
-            title: 'Dylan Dog #$number',
-            publisher: publisher,
-            year: firstYear == null
-                ? null
-                : firstYear + ((number - first) ~/ 12),
-            owned: false,
-            read: false,
-            condition: 'F',
-            notes: 'Početni katalog · BSP oznaka $code',
-            updatedAt: now,
-          ),
-        );
-      }
-    }
-
-    // Starter catalogue follows the publisher/number ranges documented by BSP.
-    edition(
-      code: 'DESD',
-      name: 'Extra (SD)',
-      publisher: 'Slobodna Dalmacija',
-      first: 1,
-      last: 12,
-      firstYear: 1999,
-    );
-    edition(
-      code: 'DELU',
-      name: 'Extra (L)',
-      publisher: 'Ludens',
-      first: 13,
-      last: 166,
-      firstYear: 2002,
-    );
-    edition(
-      code: 'DDSD',
-      name: 'Regularna (SD)',
-      publisher: 'Slobodna Dalmacija',
-      first: 1,
-      last: 60,
-      firstYear: 1994,
-    );
-    edition(
-      code: 'DDLU',
-      name: 'Regularna (L)',
-      publisher: 'Ludens',
-      first: 61,
-      last: 201,
-      firstYear: 2002,
-    );
-
-    issues.addAll(catalog.issues.map((issue) => issue.toComic()));
-
-    await db.upsertCatalogAll(issues);
-    await prefs.setBool('starter_catalog_v1', true);
-    await prefs.setBool('starter_catalog_v2', true);
-    await prefs.setBool('starter_catalog_v3', true);
-  }
-
   Future<void> save(Comic comic) async {
     final fresh = comic.copyWith(updatedAt: _nowMilliseconds());
-    final next = List<Comic>.of(comics);
-    final index = next.indexWhere((item) => item.id == fresh.id);
-    if (fresh.deleted) {
-      next.removeWhere((item) => item.id == fresh.id);
-    } else if (index < 0) {
-      next.add(fresh);
-    } else {
-      next[index] = fresh;
-    }
-    comics = next;
-    notifyListeners();
+    _publishOptimistic(fresh);
     try {
-      await db.upsert(fresh);
+      await collectionRepository.upsert(fresh);
     } on Object {
       await reload();
       rethrow;
@@ -181,7 +142,7 @@ class AppController extends ChangeNotifier {
         ),
       );
     }
-    await db.replaceAll(changes);
+    await collectionRepository.replaceAll(changes);
     await reload();
     unawaited(sync());
   }
@@ -202,7 +163,7 @@ class AppController extends ChangeNotifier {
     comics = byId.values.toList(growable: false);
     notifyListeners();
     try {
-      await db.replaceAll(fresh);
+      await collectionRepository.replaceAll(fresh);
     } on Object {
       await reload();
       rethrow;
@@ -210,10 +171,8 @@ class AppController extends ChangeNotifier {
     unawaited(sync());
   }
 
-  Future<void> linkBarcode(String barcode, CatalogIssue issue) async {
-    await db.saveBarcodeMapping(barcode.trim(), issue.id);
-    catalog.registerBarcode(barcode, issue);
-  }
+  Future<void> linkBarcode(String barcode, CatalogIssue issue) =>
+      catalogService.linkBarcode(barcode, issue);
 
   Future<void> add({
     required String series,
@@ -237,7 +196,7 @@ class AppController extends ChangeNotifier {
   }) async {
     await save(
       Comic(
-        id: const Uuid().v4(),
+        id: _idGenerator(),
         series: series.trim(),
         edition: edition.trim(),
         number: number,
@@ -264,28 +223,32 @@ class AppController extends ChangeNotifier {
   Future<void> remove(Comic comic) => save(comic.copyWith(deleted: true));
 
   Future<void> reload() async {
-    comics = await db.all();
+    comics = await collectionRepository.load();
     notifyListeners();
   }
 
   Future<void> sync({bool force = false}) async {
-    if (!autoSync && !force) return;
-    if (syncing) return;
+    if ((!autoSync && !force) || syncing || syncCoordinator.running) return;
     syncing = true;
     notifyListeners();
-    final result = await syncService.sync();
-    syncing = false;
-    online = result.ok;
-    syncMessage = result.message;
-    if (result.ok) {
-      comics = await db.all();
-      final prefs = await SharedPreferences.getInstance();
-      final timestamp = prefs.getInt('last_sync');
-      if (timestamp != null) {
-        lastSyncAt = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    try {
+      final execution = await syncCoordinator.synchronize(
+        enabled: autoSync,
+        force: force,
+      );
+      if (execution == null) return;
+      online = execution.result.ok;
+      syncMessage = execution.result.message;
+      if (execution.result.ok) {
+        comics = execution.comics ?? await collectionRepository.load();
+        if (execution.lastSyncAt != null) {
+          lastSyncAt = execution.lastSyncAt;
+        }
       }
+    } finally {
+      syncing = false;
+      notifyListeners();
     }
-    notifyListeners();
   }
 
   Future<void> updatePreferences({
@@ -296,26 +259,17 @@ class AppController extends ChangeNotifier {
     bool? autoSync,
     bool? newIssueNotifications,
   }) async {
-    final prefs = await SharedPreferences.getInstance();
-    if (darkMode != null) {
-      this.darkMode = darkMode;
-      await prefs.setBool('dark_mode', darkMode);
-    }
-    if (accent != null) {
-      this.accent = accent;
-      await prefs.setString('accent', accent);
-    }
-    if (comicTitles != null) {
-      this.comicTitles = comicTitles;
-      await prefs.setBool('comic_titles', comicTitles);
-    }
-    if (showStatistics != null) {
-      this.showStatistics = showStatistics;
-      await prefs.setBool('show_statistics', showStatistics);
-    }
+    final updated = await settingsRepository.update(
+      _currentSettings,
+      darkMode: darkMode,
+      accent: accent,
+      comicTitles: comicTitles,
+      showStatistics: showStatistics,
+      autoSync: autoSync,
+      newIssueNotifications: newIssueNotifications,
+    );
+    _applySettings(updated);
     if (autoSync != null) {
-      this.autoSync = autoSync;
-      await prefs.setBool('auto_sync', autoSync);
       if (autoSync) {
         unawaited(sync());
       } else {
@@ -323,37 +277,50 @@ class AppController extends ChangeNotifier {
       }
       _scheduleAutoSync();
     }
-    if (newIssueNotifications != null) {
-      this.newIssueNotifications = newIssueNotifications;
-      await prefs.setBool('new_issue_notifications', newIssueNotifications);
-    }
     notifyListeners();
   }
 
-  Future<void> _loadPreferences() async {
-    final prefs = await SharedPreferences.getInstance();
-    darkMode = prefs.getBool('dark_mode') ?? true;
-    accent = prefs.getString('accent') ?? 'red';
-    comicTitles = prefs.getBool('comic_titles') ?? false;
-    showStatistics = prefs.getBool('show_statistics') ?? true;
-    autoSync = prefs.getBool('auto_sync') ?? true;
-    newIssueNotifications = prefs.getBool('new_issue_notifications') ?? true;
-    final timestamp = prefs.getInt('last_sync');
-    if (timestamp != null) {
-      lastSyncAt = DateTime.fromMillisecondsSinceEpoch(timestamp);
+  AppSettings get _currentSettings => AppSettings(
+    darkMode: darkMode,
+    accent: accent,
+    comicTitles: comicTitles,
+    showStatistics: showStatistics,
+    autoSync: autoSync,
+    newIssueNotifications: newIssueNotifications,
+    lastSyncAt: lastSyncAt,
+  );
+
+  void _applySettings(AppSettings settings) {
+    darkMode = settings.darkMode;
+    accent = settings.accent;
+    comicTitles = settings.comicTitles;
+    showStatistics = settings.showStatistics;
+    autoSync = settings.autoSync;
+    newIssueNotifications = settings.newIssueNotifications;
+    lastSyncAt = settings.lastSyncAt;
+  }
+
+  void _publishOptimistic(Comic fresh) {
+    final next = List<Comic>.of(comics);
+    final index = next.indexWhere((item) => item.id == fresh.id);
+    if (fresh.deleted) {
+      next.removeWhere((item) => item.id == fresh.id);
+    } else if (index < 0) {
+      next.add(fresh);
+    } else {
+      next[index] = fresh;
     }
+    comics = next;
+    notifyListeners();
   }
 
   void _scheduleAutoSync() {
-    _timer?.cancel();
-    if (autoSync) {
-      _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
-    }
+    syncCoordinator.schedule(enabled: autoSync, action: sync);
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    syncCoordinator.dispose();
     super.dispose();
   }
 }

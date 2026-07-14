@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:comicollect/app_controller.dart';
 import 'package:comicollect/data/catalog_repository.dart';
+import 'package:comicollect/data/collection_repository.dart';
 import 'package:comicollect/data/local_database.dart';
 import 'package:comicollect/data/sync_service.dart';
 import 'package:comicollect/models/catalog_issue.dart';
@@ -76,6 +77,26 @@ void main() {
     expect(controller.startupError, contains('pokvareno'));
     expect(controller.syncMessage, 'Greška lokalnih podataka');
   });
+
+  test(
+    'uses an injected collection repository as its persistence boundary',
+    () async {
+      final db = _MemoryDatabase();
+      final repository = CollectionRepository(db);
+      final controller = AppController(
+        collectionRepository: repository,
+        catalog: _FakeCatalog(const []),
+        nowMilliseconds: () => 321,
+      )..autoSync = false;
+      addTearDown(controller.dispose);
+
+      await controller.save(_comic('one', 1));
+
+      expect(controller.db, same(db));
+      expect(controller.collectionRepository, same(repository));
+      expect(db.stored['one']!.updatedAt, 321);
+    },
+  );
 
   test(
     'save inserts, updates and tombstone-removes with one timestamp',
@@ -206,6 +227,7 @@ void main() {
       db: db,
       catalog: _FakeCatalog(const []),
       nowMilliseconds: () => 900,
+      idGenerator: () => 'generated-id',
     )..autoSync = false;
     addTearDown(controller.dispose);
 
@@ -231,7 +253,7 @@ void main() {
     );
 
     final comic = controller.comics.single;
-    expect(comic.id, isNotEmpty);
+    expect(comic.id, 'generated-id');
     expect(comic.series, 'Dylan Dog');
     expect(comic.edition, 'Extra');
     expect(comic.title, 'Kuća sjećanja');
@@ -315,6 +337,25 @@ void main() {
     await Future.wait([first, second]);
     expect(sync.calls, 1);
   });
+
+  test(
+    'sync always clears its busy state when a collaborator throws',
+    () async {
+      final db = _MemoryDatabase();
+      final sync = _FakeSyncService(db)..error = StateError('network');
+      final controller = AppController(
+        db: db,
+        catalog: _FakeCatalog(const []),
+        syncService: sync,
+      )..autoSync = true;
+      addTearDown(controller.dispose);
+
+      await expectLater(controller.sync(), throwsStateError);
+
+      expect(controller.syncing, isFalse);
+      expect(sync.calls, 1);
+    },
+  );
 
   test(
     'updatePreferences persists every setting and controls auto-sync',
@@ -439,10 +480,12 @@ class _FakeSyncService extends SyncService {
   int calls = 0;
   SyncResult result = const SyncResult(true, 'Sinkronizirano');
   Future<SyncResult>? pending;
+  Object? error;
 
   @override
   Future<SyncResult> sync() async {
     calls++;
+    if (error case final value?) throw value;
     return pending ?? result;
   }
 }

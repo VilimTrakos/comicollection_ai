@@ -105,12 +105,16 @@ pregledaj PNG razlike prije commita.
 
 - `lib/main.dart` — samo startup i pokretanje aplikacije
 - `lib/comicollect.dart` — javni package API za testove i druge klijente
+- `lib/app_controller.dart` — tanki UI facade i `ChangeNotifier` stanje
 - `lib/app/` — korijenski `MaterialApp`
 - `lib/features/` — auth, shell, home, collection, comics, search, scanner i settings
 - `lib/ui/` — tema i zajednički prezentacijski widgeti
-- `lib/data/`, `lib/models/`, `lib/services/` — trajna pohrana, domenski modeli i čiste usluge
+- `lib/data/` — SQLite, mrežni transport te collection/settings repozitoriji
+- `lib/models/` — domenski modeli bez UI ovisnosti
+- `lib/services/` — inicijalizacija kataloga i koordinacija sinkronizacije/timera
 
-Featurei ovise o data/model/service i UI slojevima, dok `main.dart` ne sadrži
+Featurei razgovaraju s `AppController` facadeom, a trajna pohrana, postavke,
+katalog i sinkronizacija imaju zasebne testabilne granice. `main.dart` ne sadrži
 poslovnu logiku. Stari scanner import u `lib/screens/` ostaje samo kao
 kompatibilni re-export.
 
