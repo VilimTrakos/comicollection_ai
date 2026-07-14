@@ -9,9 +9,22 @@ import 'models/comic.dart';
 import 'models/catalog_issue.dart';
 
 class AppController extends ChangeNotifier {
-  final db = LocalDatabase();
-  final catalog = CatalogRepository();
-  late final SyncService syncService = SyncService(db);
+  AppController({
+    LocalDatabase? db,
+    CatalogRepository? catalog,
+    SyncService? syncService,
+    int Function()? nowMilliseconds,
+  }) : db = db ?? LocalDatabase(),
+       catalog = catalog ?? CatalogRepository(),
+       _providedSyncService = syncService,
+       _nowMilliseconds =
+           nowMilliseconds ?? (() => DateTime.now().millisecondsSinceEpoch);
+
+  final LocalDatabase db;
+  final CatalogRepository catalog;
+  final SyncService? _providedSyncService;
+  final int Function() _nowMilliseconds;
+  late final SyncService syncService = _providedSyncService ?? SyncService(db);
   List<Comic> comics = [];
   bool loading = true;
   bool syncing = false;
@@ -57,7 +70,7 @@ class AppController extends ChangeNotifier {
   Future<void> _seedStarterCatalog() async {
     final prefs = await SharedPreferences.getInstance();
     if (prefs.getBool('starter_catalog_v3') ?? false) return;
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _nowMilliseconds();
     final issues = <Comic>[];
 
     void edition({
@@ -133,9 +146,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> save(Comic comic) async {
-    final fresh = comic.copyWith(
-      updatedAt: DateTime.now().millisecondsSinceEpoch,
-    );
+    final fresh = comic.copyWith(updatedAt: _nowMilliseconds());
     final next = List<Comic>.of(comics);
     final index = next.indexWhere((item) => item.id == fresh.id);
     if (fresh.deleted) {
@@ -157,7 +168,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveScanResults(Map<CatalogIssue, bool> results) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _nowMilliseconds();
     final currentById = {for (final comic in comics) comic.id: comic};
     final changes = <Comic>[];
     for (final entry in results.entries) {
@@ -176,7 +187,7 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> saveAll(Iterable<Comic> changes) async {
-    final now = DateTime.now().millisecondsSinceEpoch;
+    final now = _nowMilliseconds();
     final fresh = changes
         .map((comic) => comic.copyWith(updatedAt: now))
         .toList(growable: false);
@@ -245,7 +256,7 @@ class AppController extends ChangeNotifier {
         pageCount: pageCount,
         writer: writer.trim(),
         artist: artist.trim(),
-        updatedAt: DateTime.now().millisecondsSinceEpoch,
+        updatedAt: _nowMilliseconds(),
       ),
     );
   }

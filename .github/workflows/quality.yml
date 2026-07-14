@@ -1,0 +1,43 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  flutter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.6"
+          channel: stable
+          cache: true
+      - run: flutter pub get
+      - run: dart format --output=none --set-exit-if-changed lib test
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub --coverage
+      - name: Enforce 80% line coverage
+        run: >-
+          awk -F'[:,]'
+          '/^DA:/ { total++; if ($3 > 0) hit++ }
+          END { coverage = total ? 100 * hit / total : 0;
+          printf "Line coverage: %.2f%% (%d/%d)\n", coverage, hit, total;
+          if (coverage < 80) exit 1 }'
+          coverage/lcov.info
+
+  server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest -v test_server.py

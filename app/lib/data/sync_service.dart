@@ -11,8 +11,10 @@ class SyncResult {
 }
 
 class SyncService {
-  SyncService(this.db);
+  SyncService(this.db, {HttpClient Function()? clientFactory})
+    : _clientFactory = clientFactory ?? HttpClient.new;
   final LocalDatabase db;
+  final HttpClient Function() _clientFactory;
 
   Future<SyncResult> sync() async {
     final prefs = await SharedPreferences.getInstance();
@@ -26,7 +28,8 @@ class SyncService {
     }
     final since = prefs.getInt('last_sync') ?? 0;
     final changes = await db.changedSince(since);
-    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    final client = _clientFactory()
+      ..connectionTimeout = const Duration(seconds: 5);
     try {
       final request = await client.postUrl(Uri.parse('$server/api/v1/sync'));
       request.headers.contentType = ContentType.json;
@@ -51,6 +54,10 @@ class SyncService {
       await db.mergeRemote(remote);
       await prefs.setInt('last_sync', (payload['server_time'] as num).toInt());
       return const SyncResult(true, 'Sinkronizirano');
+    } on FormatException {
+      return const SyncResult(false, 'Offline · spremljeno lokalno');
+    } on ArgumentError {
+      return const SyncResult(false, 'Offline · spremljeno lokalno');
     } on Exception {
       return const SyncResult(false, 'Offline · spremljeno lokalno');
     } finally {

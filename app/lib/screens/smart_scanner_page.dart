@@ -11,6 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import '../app_controller.dart';
 import '../data/catalog_repository.dart';
 import '../models/catalog_issue.dart';
+import '../services/shelf_text_matcher.dart';
 import '../services/visual_signature.dart';
 
 const _scannerRed = Color(0xFFC6291E);
@@ -26,9 +27,16 @@ Future<void> _deleteTemporaryFile(File file) async {
 }
 
 class SmartScannerPage extends StatefulWidget {
-  const SmartScannerPage({super.key, required this.controller});
+  const SmartScannerPage({
+    super.key,
+    required this.controller,
+    this.cameraLoader = availableCameras,
+    this.pickGalleryImage,
+  });
 
   final AppController controller;
+  final Future<List<CameraDescription>> Function() cameraLoader;
+  final Future<XFile?> Function()? pickGalleryImage;
 
   @override
   State<SmartScannerPage> createState() => _SmartScannerPageState();
@@ -86,7 +94,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
 
   Future<void> _initializeCamera([CameraDescription? preferred]) async {
     try {
-      final cameras = await availableCameras();
+      final cameras = await widget.cameraLoader();
       if (cameras.isEmpty) throw StateError('Kamera nije pronađena.');
       final description =
           preferred ??
@@ -302,10 +310,12 @@ class _SmartScannerPageState extends State<SmartScannerPage>
       });
     }
     try {
-      final photo = await _imagePicker.pickImage(
-        source: ImageSource.gallery,
-        requestFullMetadata: false,
-      );
+      final photo =
+          await (widget.pickGalleryImage?.call() ??
+              _imagePicker.pickImage(
+                source: ImageSource.gallery,
+                requestFullMetadata: false,
+              ));
       if (photo == null) {
         if (mounted) setState(() => _message = 'Odabir slike je otkazan');
         return;
@@ -457,7 +467,10 @@ class _SmartScannerPageState extends State<SmartScannerPage>
           }
         }
       }
-      final result = _catalogIssuesFromLines(lines);
+      final result = ShelfTextMatcher.matchLines(
+        lines,
+        widget.controller.catalog.issues,
+      );
       final hasOldBoy = lines.any(
         (line) => CatalogRepository.normalize(line).contains('OLD BOY'),
       );
@@ -469,57 +482,6 @@ class _SmartScannerPageState extends State<SmartScannerPage>
         unawaited(_deleteTemporaryFile(file));
       }
     }
-  }
-
-  List<CatalogIssue> _catalogIssuesFromLines(Iterable<String> lines) {
-    final found = <String, CatalogIssue>{};
-    final catalog = widget.controller.catalog;
-    for (final line in lines) {
-      final normalized = CatalogRepository.normalize(line);
-      final hasSeries = normalized.contains('DYLAN DOG');
-      if (hasSeries) {
-        for (final match in RegExp(
-          r'(?<!\d)(\d{1,3})(?!\d)',
-        ).allMatches(normalized)) {
-          final number = int.parse(match.group(1)!);
-          final candidates = catalog.issues
-              .where(
-                (issue) =>
-                    issue.series == 'Dylan Dog' && issue.number == number,
-              )
-              .toList();
-          if (candidates.length == 1) {
-            found[candidates.first.id] = candidates.first;
-          } else if (candidates.isNotEmpty) {
-            final special = normalized.contains('SPECIJAL');
-            final maxi =
-                normalized.contains('MAXI') || normalized.contains('OLD BOY');
-            final selected = candidates.firstWhere(
-              (issue) => maxi
-                  ? issue.edition.contains('Maxi')
-                  : issue.edition.contains('Specijal') == special &&
-                        !issue.edition.contains('Maxi'),
-              orElse: () => candidates.first,
-            );
-            found[selected.id] = selected;
-          }
-        }
-      }
-      for (final issue in catalog.issues) {
-        final title = CatalogRepository.normalize(issue.title);
-        if (title.length >= 5 &&
-            (normalized.contains(title) ||
-                _containsFuzzyTitle(normalized, title))) {
-          found[issue.id] = issue;
-        }
-      }
-    }
-    final result = found.values.toList()
-      ..sort((a, b) {
-        final edition = a.edition.compareTo(b.edition);
-        return edition != 0 ? edition : a.number.compareTo(b.number);
-      });
-    return result;
   }
 
   Future<void> _selectOldBoyIssue() async {
@@ -586,51 +548,6 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     if (issue == null) return;
     _oldBoyNeedsSelection = false;
     _accept(issue, 'Old Boy ručno potvrđen');
-  }
-
-  bool _containsFuzzyTitle(String text, String title) {
-    final textWords = text
-        .split(' ')
-        .where((word) => word.length >= 4)
-        .toList();
-    final titleWords = title
-        .split(' ')
-        .where((word) => word.length >= 4)
-        .toList();
-    if (textWords.isEmpty || titleWords.isEmpty) return false;
-    var matched = 0;
-    for (final expected in titleWords) {
-      if (textWords.any((actual) => _wordsAreClose(expected, actual))) {
-        matched++;
-      }
-    }
-    if (titleWords.length == 1) return matched == 1;
-    return matched >= 2 && matched / titleWords.length >= .6;
-  }
-
-  bool _wordsAreClose(String expected, String actual) {
-    if (expected == actual) return true;
-    final allowed = expected.length >= 9 ? 2 : 1;
-    if ((expected.length - actual.length).abs() > allowed) return false;
-    return _editDistance(expected, actual) <= allowed;
-  }
-
-  int _editDistance(String left, String right) {
-    var previous = List<int>.generate(right.length + 1, (index) => index);
-    for (var i = 0; i < left.length; i++) {
-      final current = <int>[i + 1];
-      for (var j = 0; j < right.length; j++) {
-        current.add(
-          [
-            current[j] + 1,
-            previous[j + 1] + 1,
-            previous[j] + (left.codeUnitAt(i) == right.codeUnitAt(j) ? 0 : 1),
-          ].reduce((a, b) => a < b ? a : b),
-        );
-      }
-      previous = current;
-    }
-    return previous.last;
   }
 
   Future<void> _openReview() async {

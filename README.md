@@ -86,9 +86,20 @@ telefon release APK je dovoljan.
 ## Provjera
 
 ```bash
-cd app && flutter analyze && flutter test
-cd ../server && python3 -m unittest -v test_server.py
+cd app
+dart format --output=none --set-exit-if-changed lib test
+flutter analyze
+flutter test --coverage
+
+cd ../server
+python3 -m unittest -v test_server.py
 ```
+
+Isti se paket automatski izvršava u GitHub Actionsu pri svakom pushu i pull
+requestu. CI zahtijeva najmanje 80% line coveragea. Vizualne regresije ključnih
+ekrana nalaze se u `app/test/goldens/`; nakon namjerne promjene dizajna obnovi
+ih naredbom `flutter test --update-goldens test/visual_regression_test.dart` i
+pregledaj PNG razlike prije commita.
 
 ## Prototip
 

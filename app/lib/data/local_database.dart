@@ -3,10 +3,13 @@ import 'package:sqflite/sqflite.dart';
 import '../models/comic.dart';
 
 class LocalDatabase {
+  LocalDatabase({this.pathOverride});
+
+  final String? pathOverride;
   Database? _db;
 
   Future<Database> get database async => _db ??= await openDatabase(
-    join(await getDatabasesPath(), 'comicollect.db'),
+    pathOverride ?? join(await getDatabasesPath(), 'comicollect.db'),
     version: 4,
     onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
@@ -197,5 +200,11 @@ class LocalDatabase {
         }
       }
     });
+  }
+
+  Future<void> close() async {
+    final db = _db;
+    _db = null;
+    await db?.close();
   }
 }

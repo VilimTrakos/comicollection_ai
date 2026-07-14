@@ -69,4 +69,79 @@ void main() {
     );
     expect(matches.first.issue.id, oldBoy.id);
   });
+
+  test('load is idempotent and unknown ids and barcodes return null', () async {
+    final catalog = CatalogRepository();
+    await catalog.load();
+    final original = catalog.issues;
+    await catalog.load();
+
+    expect(identical(catalog.issues, original), isTrue);
+    expect(catalog.byId('missing'), isNull);
+    expect(catalog.byBarcode('missing'), isNull);
+  });
+
+  test(
+    'barcode registration trims values, replaces mappings and ignores empty',
+    () async {
+      final catalog = CatalogRepository();
+      await catalog.load();
+      final first = catalog.byId('catalog-DDLU-61')!;
+      final second = catalog.byId('catalog-DDLU-62')!;
+
+      catalog.registerBarcode(' 123456 ', first);
+      expect(catalog.byBarcode('123456'), same(first));
+      catalog.registerBarcode('123456', second);
+      expect(catalog.byBarcode(' 123456 '), same(second));
+      catalog.registerBarcode('  ', first);
+      expect(catalog.byBarcode(''), isNull);
+    },
+  );
+
+  test('normalization removes Croatian diacritics and punctuation', () {
+    expect(
+      CatalogRepository.normalize(' Čuvar Đavolje šume, žar! '),
+      'CUVAR DAVOLJE SUME ZAR',
+    );
+    expect(CatalogRepository.normalize('---'), isEmpty);
+  });
+
+  test('text matching handles empty, title and result limits', () async {
+    final catalog = CatalogRepository();
+    await catalog.load();
+
+    expect(catalog.matchText(''), isEmpty);
+    expect(catalog.matchText('!?!'), isEmpty);
+    final byTitle = catalog.matchText('NESMILJENI HOOK');
+    expect(byTitle.first.id, 'catalog-DDLU-61');
+    expect(catalog.matchText('DYLAN DOG', limit: 2), hasLength(2));
+  });
+
+  test(
+    'visual matching respects limit and penalizes different signatures',
+    () async {
+      final catalog = CatalogRepository();
+      await catalog.load();
+      final issue = catalog.byId('catalog-DDLU-61')!;
+
+      final exact = catalog.matchVisual(
+        visualHash: issue.visualHash!,
+        colorSignature: issue.colorSignature!,
+        limit: 1,
+      );
+      final different = catalog.matchVisual(
+        visualHash: 'ffffffffffffffff',
+        colorSignature: Uint8List(48),
+        limit: 3,
+      );
+
+      expect(exact, hasLength(1));
+      expect(exact.single.score, closeTo(1, .0001));
+      expect(different, hasLength(3));
+      expect(
+        different.every((match) => match.score >= 0 && match.score <= 1),
+        isTrue,
+      );
+    },
+  );
 }
