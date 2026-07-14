@@ -31,6 +31,10 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_comic(comic)
 
+    def test_validation_accepts_unspecified_grade(self):
+        comic = self.comic(); comic["condition_grade"] = ""
+        self.assertEqual(validate_comic(comic)["condition_grade"], "")
+
     def test_sync_keeps_issue_metadata(self):
         comic = self.comic()
         comic.update({

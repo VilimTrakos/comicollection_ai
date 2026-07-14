@@ -114,12 +114,13 @@ def validate_comic(raw: dict) -> dict:
     if any(key not in raw for key in required):
         raise ValueError("comic is missing required fields")
     text = lambda key, limit: str(raw.get(key, ""))[:limit]
+    condition_grade = text("condition_grade", 8) if "condition_grade" in raw else "F"
     comic = {
         "id": text("id", 64), "series": text("series", 200), "edition": text("edition", 200),
         "number": int(raw["number"]), "title": text("title", 500), "publisher": text("publisher", 200),
         "year": int(raw["year"]) if raw.get("year") is not None else None,
         "owned": int(bool(raw.get("owned"))), "is_read": int(bool(raw.get("is_read"))),
-        "condition_grade": text("condition_grade", 8) or "F",
+        "condition_grade": condition_grade,
         "purchase_price": float(raw["purchase_price"]) if raw.get("purchase_price") is not None else None,
         "estimated_value": float(raw["estimated_value"]) if raw.get("estimated_value") is not None else None,
         "is_duplicate": int(bool(raw.get("is_duplicate"))), "loaned_to": text("loaned_to", 300),
@@ -132,7 +133,7 @@ def validate_comic(raw: dict) -> dict:
     }
     if not comic["id"] or not comic["series"] or comic["number"] < 0:
         raise ValueError("invalid id, series, or number")
-    if comic["condition_grade"] not in {"M", "VF", "F", "G", "P"}:
+    if comic["condition_grade"] not in {"", "M", "VF", "F", "G", "P"}:
         raise ValueError("invalid condition_grade")
     return comic
 
