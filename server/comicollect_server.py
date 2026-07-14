@@ -20,7 +20,8 @@ MAX_BODY = 8 * 1024 * 1024
 FIELDS = (
     "id", "series", "edition", "number", "title", "publisher", "year",
     "owned", "is_read", "condition_grade", "purchase_price", "estimated_value",
-    "is_duplicate", "loaned_to", "notes", "cover_asset", "deleted", "updated_at",
+    "is_duplicate", "loaned_to", "notes", "cover_asset", "rating", "page_count",
+    "writer", "artist", "deleted", "updated_at",
 )
 UPSERT = f"""INSERT INTO comics ({','.join(FIELDS)}) VALUES ({','.join('?' for _ in FIELDS)})
 ON CONFLICT(id) DO UPDATE SET {','.join(f'{f}=excluded.{f}' for f in FIELDS[1:])}
@@ -51,12 +52,28 @@ class Store:
                 condition_grade TEXT NOT NULL, purchase_price REAL, estimated_value REAL,
                 is_duplicate INTEGER NOT NULL, loaned_to TEXT NOT NULL DEFAULT '',
                 notes TEXT NOT NULL DEFAULT '', cover_asset TEXT NOT NULL DEFAULT '',
+                rating INTEGER NOT NULL DEFAULT 0, page_count INTEGER,
+                writer TEXT NOT NULL DEFAULT '', artist TEXT NOT NULL DEFAULT '',
                 deleted INTEGER NOT NULL DEFAULT 0,
                 updated_at INTEGER NOT NULL)""")
             columns = {row[1] for row in db.execute("PRAGMA table_info(comics)")}
             if "cover_asset" not in columns:
                 db.execute(
                     "ALTER TABLE comics ADD COLUMN cover_asset TEXT NOT NULL DEFAULT ''"
+                )
+            if "rating" not in columns:
+                db.execute(
+                    "ALTER TABLE comics ADD COLUMN rating INTEGER NOT NULL DEFAULT 0"
+                )
+            if "page_count" not in columns:
+                db.execute("ALTER TABLE comics ADD COLUMN page_count INTEGER")
+            if "writer" not in columns:
+                db.execute(
+                    "ALTER TABLE comics ADD COLUMN writer TEXT NOT NULL DEFAULT ''"
+                )
+            if "artist" not in columns:
+                db.execute(
+                    "ALTER TABLE comics ADD COLUMN artist TEXT NOT NULL DEFAULT ''"
                 )
             db.execute("CREATE INDEX IF NOT EXISTS idx_updated ON comics(updated_at)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_series ON comics(series, edition, number)")
@@ -107,6 +124,9 @@ def validate_comic(raw: dict) -> dict:
         "estimated_value": float(raw["estimated_value"]) if raw.get("estimated_value") is not None else None,
         "is_duplicate": int(bool(raw.get("is_duplicate"))), "loaned_to": text("loaned_to", 300),
         "notes": text("notes", 10000), "cover_asset": text("cover_asset", 500),
+        "rating": max(0, min(5, int(raw.get("rating", 0)))),
+        "page_count": int(raw["page_count"]) if raw.get("page_count") is not None else None,
+        "writer": text("writer", 300), "artist": text("artist", 300),
         "deleted": int(bool(raw.get("deleted"))),
         "updated_at": int(raw["updated_at"]),
     }

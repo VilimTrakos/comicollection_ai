@@ -16,6 +16,10 @@ class Comic {
     this.loanedTo = '',
     this.notes = '',
     this.coverAsset = '',
+    this.rating = 0,
+    this.pageCount,
+    this.writer = '',
+    this.artist = '',
     this.deleted = false,
     required this.updatedAt,
   });
@@ -36,6 +40,10 @@ class Comic {
   final String loanedTo;
   final String notes;
   final String coverAsset;
+  final int rating;
+  final int? pageCount;
+  final String writer;
+  final String artist;
   final bool deleted;
   final int updatedAt;
 
@@ -55,6 +63,10 @@ class Comic {
     String? loanedTo,
     String? notes,
     String? coverAsset,
+    int? rating,
+    int? pageCount,
+    String? writer,
+    String? artist,
     bool? deleted,
     int? updatedAt,
   }) => Comic(
@@ -74,6 +86,10 @@ class Comic {
     loanedTo: loanedTo ?? this.loanedTo,
     notes: notes ?? this.notes,
     coverAsset: coverAsset ?? this.coverAsset,
+    rating: rating ?? this.rating,
+    pageCount: pageCount ?? this.pageCount,
+    writer: writer ?? this.writer,
+    artist: artist ?? this.artist,
     deleted: deleted ?? this.deleted,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -95,6 +111,10 @@ class Comic {
     'loaned_to': loanedTo,
     'notes': notes,
     'cover_asset': coverAsset,
+    'rating': rating,
+    'page_count': pageCount,
+    'writer': writer,
+    'artist': artist,
     'deleted': deleted ? 1 : 0,
     'updated_at': updatedAt,
   };
@@ -118,6 +138,10 @@ class Comic {
     loanedTo: (m['loaned_to'] ?? '') as String,
     notes: (m['notes'] ?? '') as String,
     coverAsset: (m['cover_asset'] ?? '') as String,
+    rating: (m['rating'] as num? ?? 0).toInt(),
+    pageCount: (m['page_count'] as num?)?.toInt(),
+    writer: (m['writer'] ?? '') as String,
+    artist: (m['artist'] ?? '') as String,
     deleted: (m['deleted'] as num? ?? 0) != 0,
     updatedAt: (m['updated_at'] as num).toInt(),
   );

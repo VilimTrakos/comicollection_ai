@@ -31,6 +31,20 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_comic(comic)
 
+    def test_sync_keeps_issue_metadata(self):
+        comic = self.comic()
+        comic.update({
+            "rating": 4,
+            "page_count": 98,
+            "writer": "Tiziano Sclavi",
+            "artist": "Angelo Stano",
+        })
+        _, rows = self.store.sync(0, [comic])
+        self.assertEqual(rows[0]["rating"], 4)
+        self.assertEqual(rows[0]["page_count"], 98)
+        self.assertEqual(rows[0]["writer"], "Tiziano Sclavi")
+        self.assertEqual(rows[0]["artist"], "Angelo Stano")
+
     def test_backup(self):
         self.store.sync(0, [self.comic()])
         target = self.store.backup(Path(self.tmp.name) / "backups")

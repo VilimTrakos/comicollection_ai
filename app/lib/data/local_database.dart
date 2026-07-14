@@ -7,7 +7,7 @@ class LocalDatabase {
 
   Future<Database> get database async => _db ??= await openDatabase(
     join(await getDatabasesPath(), 'comicollect.db'),
-    version: 3,
+    version: 4,
     onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
     onCreate: (db, version) async {
       await db.execute('''CREATE TABLE comics(
@@ -17,6 +17,8 @@ class LocalDatabase {
         condition_grade TEXT NOT NULL, purchase_price REAL, estimated_value REAL,
         is_duplicate INTEGER NOT NULL, loaned_to TEXT NOT NULL DEFAULT '',
         notes TEXT NOT NULL DEFAULT '', cover_asset TEXT NOT NULL DEFAULT '',
+        rating INTEGER NOT NULL DEFAULT 0, page_count INTEGER,
+        writer TEXT NOT NULL DEFAULT '', artist TEXT NOT NULL DEFAULT '',
         deleted INTEGER NOT NULL DEFAULT 0,
         updated_at INTEGER NOT NULL)''');
       await db.execute(
@@ -36,6 +38,18 @@ class LocalDatabase {
         await db.execute('''CREATE TABLE barcode_mappings(
           barcode TEXT PRIMARY KEY, comic_id TEXT NOT NULL,
           FOREIGN KEY(comic_id) REFERENCES comics(id) ON DELETE CASCADE)''');
+      }
+      if (oldVersion < 4) {
+        await db.execute(
+          'ALTER TABLE comics ADD COLUMN rating INTEGER NOT NULL DEFAULT 0',
+        );
+        await db.execute('ALTER TABLE comics ADD COLUMN page_count INTEGER');
+        await db.execute(
+          "ALTER TABLE comics ADD COLUMN writer TEXT NOT NULL DEFAULT ''",
+        );
+        await db.execute(
+          "ALTER TABLE comics ADD COLUMN artist TEXT NOT NULL DEFAULT ''",
+        );
       }
     },
   );

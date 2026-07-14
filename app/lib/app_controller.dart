@@ -18,6 +18,13 @@ class AppController extends ChangeNotifier {
   bool online = false;
   String? startupError;
   String syncMessage = 'Lokalna pohrana';
+  bool darkMode = true;
+  String accent = 'red';
+  bool comicTitles = false;
+  bool showStatistics = true;
+  bool autoSync = true;
+  bool newIssueNotifications = true;
+  DateTime? lastSyncAt;
   Timer? _timer;
 
   Future<void> init() async {
@@ -25,6 +32,7 @@ class AppController extends ChangeNotifier {
     startupError = null;
     notifyListeners();
     try {
+      await _loadPreferences();
       await catalog.load();
       await _seedStarterCatalog();
       final mappings = await db.barcodeMappings();
@@ -33,9 +41,8 @@ class AppController extends ChangeNotifier {
         if (issue != null) catalog.registerBarcode(entry.key, issue);
       }
       comics = await db.all();
-      unawaited(sync());
-      _timer?.cancel();
-      _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
+      if (autoSync) unawaited(sync());
+      _scheduleAutoSync();
     } on Object catch (error, stackTrace) {
       startupError = error.toString();
       syncMessage = 'Greška lokalnih podataka';
@@ -168,6 +175,30 @@ class AppController extends ChangeNotifier {
     unawaited(sync());
   }
 
+  Future<void> saveAll(Iterable<Comic> changes) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final fresh = changes
+        .map((comic) => comic.copyWith(updatedAt: now))
+        .toList(growable: false);
+    final byId = {for (final comic in comics) comic.id: comic};
+    for (final comic in fresh) {
+      if (comic.deleted) {
+        byId.remove(comic.id);
+      } else {
+        byId[comic.id] = comic;
+      }
+    }
+    comics = byId.values.toList(growable: false);
+    notifyListeners();
+    try {
+      await db.replaceAll(fresh);
+    } on Object {
+      await reload();
+      rethrow;
+    }
+    unawaited(sync());
+  }
+
   Future<void> linkBarcode(String barcode, CatalogIssue issue) async {
     await db.saveBarcodeMapping(barcode.trim(), issue.id);
     catalog.registerBarcode(barcode, issue);
@@ -188,6 +219,10 @@ class AppController extends ChangeNotifier {
     bool duplicate = false,
     String loanedTo = '',
     String notes = '',
+    int rating = 0,
+    int? pageCount,
+    String writer = '',
+    String artist = '',
   }) async {
     await save(
       Comic(
@@ -206,6 +241,10 @@ class AppController extends ChangeNotifier {
         duplicate: duplicate,
         loanedTo: loanedTo.trim(),
         notes: notes.trim(),
+        rating: rating,
+        pageCount: pageCount,
+        writer: writer.trim(),
+        artist: artist.trim(),
         updatedAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );
@@ -218,7 +257,8 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sync() async {
+  Future<void> sync({bool force = false}) async {
+    if (!autoSync && !force) return;
     if (syncing) return;
     syncing = true;
     notifyListeners();
@@ -226,8 +266,78 @@ class AppController extends ChangeNotifier {
     syncing = false;
     online = result.ok;
     syncMessage = result.message;
-    if (result.ok) comics = await db.all();
+    if (result.ok) {
+      comics = await db.all();
+      final prefs = await SharedPreferences.getInstance();
+      final timestamp = prefs.getInt('last_sync');
+      if (timestamp != null) {
+        lastSyncAt = DateTime.fromMillisecondsSinceEpoch(timestamp);
+      }
+    }
     notifyListeners();
+  }
+
+  Future<void> updatePreferences({
+    bool? darkMode,
+    String? accent,
+    bool? comicTitles,
+    bool? showStatistics,
+    bool? autoSync,
+    bool? newIssueNotifications,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (darkMode != null) {
+      this.darkMode = darkMode;
+      await prefs.setBool('dark_mode', darkMode);
+    }
+    if (accent != null) {
+      this.accent = accent;
+      await prefs.setString('accent', accent);
+    }
+    if (comicTitles != null) {
+      this.comicTitles = comicTitles;
+      await prefs.setBool('comic_titles', comicTitles);
+    }
+    if (showStatistics != null) {
+      this.showStatistics = showStatistics;
+      await prefs.setBool('show_statistics', showStatistics);
+    }
+    if (autoSync != null) {
+      this.autoSync = autoSync;
+      await prefs.setBool('auto_sync', autoSync);
+      if (autoSync) {
+        unawaited(sync());
+      } else {
+        syncMessage = 'Automatska sinkronizacija isključena';
+      }
+      _scheduleAutoSync();
+    }
+    if (newIssueNotifications != null) {
+      this.newIssueNotifications = newIssueNotifications;
+      await prefs.setBool('new_issue_notifications', newIssueNotifications);
+    }
+    notifyListeners();
+  }
+
+  Future<void> _loadPreferences() async {
+    final prefs = await SharedPreferences.getInstance();
+    darkMode = prefs.getBool('dark_mode') ?? true;
+    accent = prefs.getString('accent') ?? 'red';
+    comicTitles = prefs.getBool('comic_titles') ?? false;
+    showStatistics = prefs.getBool('show_statistics') ?? true;
+    autoSync = prefs.getBool('auto_sync') ?? true;
+    newIssueNotifications = prefs.getBool('new_issue_notifications') ?? true;
+    final timestamp = prefs.getInt('last_sync');
+    if (timestamp != null) {
+      lastSyncAt = DateTime.fromMillisecondsSinceEpoch(timestamp);
+    }
+  }
+
+  void _scheduleAutoSync() {
+    _timer?.cancel();
+    if (autoSync) {
+      _timer = Timer.periodic(const Duration(minutes: 5), (_) => sync());
+    }
   }
 
   @override

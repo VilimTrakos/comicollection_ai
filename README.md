@@ -8,12 +8,16 @@ Pi dostupan na kućnoj mreži.
 ## Što je implementirano
 
 - Android Flutter aplikacija u `app/` (nije web wrapper)
-- dashboard, polica po serijalima, pretraga i detalji izdanja
-- dodavanje, uređivanje i sinkronizirano brisanje
+- dashboard, kolekcijski hub, statistika, filtrirani popisi i polica po serijalima
+- napredna pretraga po serijalima/brojevima s lokalnom poviješću pretraga
+- katalogom potpomognut ručni unos i skupni unos raspona s iznimkama
+- dodavanje, uređivanje, detalji izdanja i sinkronizirano brisanje
 - pametno skeniranje: automatski barkod i naslovnica, ručna fotografija police
 - lokalno OCR čitanje hrptova te pregled i skupno označavanje imam/nemam
 - BSP DDLU, DSLU i DMLU testni katalog te komprimirane WebP naslovnice ugrađene u aplikaciju
 - imam/pročitano, M/VF/F/G/P, cijena/vrijednost, dupli, posuđeno i bilješke
+- ocjena, broj stranica, scenarist i crtač u lokalnoj bazi i sinkronizaciji
+- lokalne postavke teme, naglasne boje, naslova, statistike, synca i praćenja izdanja
 - lokalna SQLite baza i CSV izvoz u međuspremnik
 - tokenom zaštićen incremental sync s pravilom "novija promjena pobjeđuje"
 - Raspberry Pi server bez vanjskih Python paketa
