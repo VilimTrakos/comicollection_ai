@@ -1,5 +1,5 @@
 import 'package:comicollect/app_controller.dart';
-import 'package:comicollect/main.dart';
+import 'package:comicollect/comicollect.dart';
 import 'package:comicollect/models/comic.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
