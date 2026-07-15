@@ -88,6 +88,31 @@ void main() {
       expect(copy.updatedAt, 99);
     });
 
+    test('copyWith preserves omitted nullable fields', () {
+      final original = _comic();
+
+      final copy = original.copyWith(title: 'Novi naslov');
+
+      expect(copy.year, original.year);
+      expect(copy.purchasePrice, original.purchasePrice);
+      expect(copy.estimatedValue, original.estimatedValue);
+      expect(copy.pageCount, original.pageCount);
+    });
+
+    test('copyWith explicitly clears nullable fields', () {
+      final copy = _comic().copyWith(
+        year: null,
+        purchasePrice: null,
+        estimatedValue: null,
+        pageCount: null,
+      );
+
+      expect(copy.year, isNull);
+      expect(copy.purchasePrice, isNull);
+      expect(copy.estimatedValue, isNull);
+      expect(copy.pageCount, isNull);
+    });
+
     test('map and JSON serialization preserve all values', () {
       final original = _comic().copyWith(
         owned: false,

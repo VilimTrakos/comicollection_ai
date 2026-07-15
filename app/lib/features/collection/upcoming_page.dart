@@ -1,16 +1,21 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app_controller.dart';
+import '../../data/release_watch_repository.dart';
 import '../../models/comic.dart';
 import '../../ui/app_theme.dart';
 import '../../ui/common_widgets.dart';
 import '../comics/comic_detail.dart';
 
 class UpcomingPage extends StatefulWidget {
-  const UpcomingPage({super.key, required this.controller});
+  const UpcomingPage({
+    super.key,
+    required this.controller,
+    this.releaseWatchRepository = const ReleaseWatchRepository(),
+  });
 
   final AppController controller;
+  final ReleaseWatchRepository releaseWatchRepository;
 
   @override
   State<UpcomingPage> createState() => _UpcomingPageState();
@@ -26,12 +31,9 @@ class _UpcomingPageState extends State<UpcomingPage> {
   }
 
   Future<void> _loadWatched() async {
-    final prefs = await SharedPreferences.getInstance();
+    final stored = await widget.releaseWatchRepository.load();
     if (mounted) {
-      setState(
-        () => watched = (prefs.getStringList('release_watch_ids') ?? const [])
-            .toSet(),
-      );
+      setState(() => watched = stored);
     }
   }
 
@@ -149,10 +151,7 @@ class _UpcomingPageState extends State<UpcomingPage> {
   }
 
   Future<void> _toggle(String id) async {
-    setState(() {
-      if (!watched.add(id)) watched.remove(id);
-    });
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('release_watch_ids', watched.toList());
+    final updated = await widget.releaseWatchRepository.toggle(id, watched);
+    if (mounted) setState(() => watched = updated);
   }
 }

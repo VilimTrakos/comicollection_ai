@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app_controller.dart';
+import '../../data/sync_settings_repository.dart';
 import '../../ui/app_theme.dart';
 import '../../ui/common_widgets.dart';
 
@@ -12,10 +12,12 @@ class SettingsPage extends StatefulWidget {
     required this.controller,
     required this.accountEmail,
     required this.onLogout,
+    this.syncSettingsRepository = const SyncSettingsRepository(),
   });
   final AppController controller;
   final String accountEmail;
   final VoidCallback onLogout;
+  final SyncSettingsRepository syncSettingsRepository;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
@@ -40,15 +42,22 @@ class _SettingsPageState extends State<SettingsPage> {
 
   Future<void> load() async {
     if (loaded) return;
-    final p = await SharedPreferences.getInstance();
-    server.text = p.getString('server_url') ?? 'http://192.168.1.50:8787';
-    token.text = p.getString('api_token') ?? '';
+    final settings = await widget.syncSettingsRepository.load();
+    server.text = settings.serverUrl.isEmpty
+        ? SyncSettingsRepository.suggestedServerUrl
+        : settings.serverUrl;
+    token.text = settings.apiToken;
     loaded = true;
     if (mounted) setState(() {});
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: widget.controller.syncChanges,
+    builder: (context, _) => _buildContent(context),
+  );
+
+  Widget _buildContent(BuildContext context) {
     final accent = Theme.of(context).colorScheme.primary;
     return ListView(
       padding: const EdgeInsets.fromLTRB(18, 10, 18, 100),
@@ -305,9 +314,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> save() async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString('server_url', server.text.trim());
-    await p.setString('api_token', token.text.trim());
+    await widget.syncSettingsRepository.saveConnection(
+      serverUrl: server.text,
+      apiToken: token.text,
+    );
     await widget.controller.sync(force: true);
     if (mounted) {
       ScaffoldMessenger.of(

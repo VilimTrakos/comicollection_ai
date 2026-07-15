@@ -62,6 +62,16 @@ void main() {
     expect((await database.all()).first.title, 'Promijenjen');
   });
 
+  test('upsert preserves barcode mappings for an edited comic', () async {
+    await database.upsert(_comic('one', 1));
+    await database.saveBarcodeMapping('123', 'one');
+
+    await database.upsert(_comic('one', 1, title: 'Promijenjen', updatedAt: 2));
+
+    expect(await database.barcodeMappings(), {'123': 'one'});
+    expect((await database.all()).single.title, 'Promijenjen');
+  });
+
   test(
     'upsertAll ignores existing rows and inserts new rows atomically',
     () async {
@@ -138,6 +148,18 @@ void main() {
     expect(byId['one']!.title, 'Zamijenjen');
   });
 
+  test('replaceAll preserves barcode mappings for replaced comics', () async {
+    await database.upsert(_comic('one', 1));
+    await database.saveBarcodeMapping('123', 'one');
+
+    await database.replaceAll([
+      _comic('one', 1, title: 'Zamijenjen', updatedAt: 2),
+    ]);
+
+    expect(await database.barcodeMappings(), {'123': 'one'});
+    expect((await database.all()).single.title, 'Zamijenjen');
+  });
+
   test('barcode mappings insert, replace and cascade on delete', () async {
     await database.upsertAll([_comic('one', 1), _comic('two', 2)]);
     await database.saveBarcodeMapping('123', 'one');
@@ -197,6 +219,18 @@ void main() {
       expect((await database.all()).first.coverAsset, 'assets/remote.webp');
     },
   );
+
+  test('mergeRemote preserves barcode mappings for merged comics', () async {
+    await database.upsert(_comic('one', 1, updatedAt: 1));
+    await database.saveBarcodeMapping('123', 'one');
+
+    await database.mergeRemote([
+      _comic('one', 1, title: 'Udaljeno', updatedAt: 2),
+    ]);
+
+    expect(await database.barcodeMappings(), {'123': 'one'});
+    expect((await database.all()).single.title, 'Udaljeno');
+  });
 
   test('migrates a version 1 database through every schema upgrade', () async {
     final path =

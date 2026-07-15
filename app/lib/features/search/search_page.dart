@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../app_controller.dart';
+import '../../data/search_history_repository.dart';
 import '../../models/comic.dart';
 import '../../ui/app_theme.dart';
 import '../../ui/common_widgets.dart';
@@ -9,8 +9,15 @@ import '../collection/series_pages.dart';
 import '../comics/comic_detail.dart';
 
 class SearchPage extends StatefulWidget {
-  const SearchPage({super.key, required this.controller});
+  const SearchPage({
+    super.key,
+    required this.controller,
+    this.historyRepository = const SearchHistoryRepository(),
+  });
+
   final AppController controller;
+  final SearchHistoryRepository historyRepository;
+
   @override
   State<SearchPage> createState() => _SearchPageState();
 }
@@ -34,21 +41,16 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _loadRecent() async {
-    final prefs = await SharedPreferences.getInstance();
+    final history = await widget.historyRepository.load();
     if (!mounted) return;
-    setState(() => recent = prefs.getStringList('recent_searches') ?? const []);
+    setState(() => recent = history);
   }
 
   Future<void> _remember([String? value]) async {
     final normalized = (value ?? query).trim();
     if (normalized.isEmpty) return;
-    final next = [
-      normalized,
-      ...recent.where((item) => item.toLowerCase() != normalized.toLowerCase()),
-    ].take(6).toList(growable: false);
+    final next = await widget.historyRepository.remember(normalized);
     if (mounted) setState(() => recent = next);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setStringList('recent_searches', next);
   }
 
   void _setQuery(String value) {

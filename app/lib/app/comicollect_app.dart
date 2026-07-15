@@ -10,7 +10,7 @@ class ComicollectApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: controller,
+    animation: controller.appearanceChanges,
     builder: (context, _) {
       final accent = accentColor(controller.accent);
       final accentDeep = accentDeepColor(controller.accent);

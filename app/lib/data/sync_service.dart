@@ -1,8 +1,8 @@
-import 'dart:convert';
 import 'dart:io';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/comic.dart';
+
 import 'local_database.dart';
+import 'sync_settings_repository.dart';
+import 'sync_transport.dart';
 
 class SyncResult {
   const SyncResult(this.ok, this.message);
@@ -11,57 +11,43 @@ class SyncResult {
 }
 
 class SyncService {
-  SyncService(this.db, {HttpClient Function()? clientFactory})
-    : _clientFactory = clientFactory ?? HttpClient.new;
+  SyncService(
+    this.db, {
+    SyncSettingsRepository? settingsRepository,
+    SyncTransport? transport,
+    HttpClient Function()? clientFactory,
+  }) : settingsRepository =
+           settingsRepository ?? const SyncSettingsRepository(),
+       transport = transport ?? HttpSyncTransport(clientFactory: clientFactory);
+
   final LocalDatabase db;
-  final HttpClient Function() _clientFactory;
+  final SyncSettingsRepository settingsRepository;
+  final SyncTransport transport;
 
   Future<SyncResult> sync() async {
-    final prefs = await SharedPreferences.getInstance();
-    final server = (prefs.getString('server_url') ?? '').replaceAll(
-      RegExp(r'/$'),
-      '',
-    );
-    final token = prefs.getString('api_token') ?? '';
-    if (server.isEmpty || token.isEmpty) {
+    final settings = await settingsRepository.load();
+    if (!settings.isConfigured) {
       return const SyncResult(false, 'Server nije podešen');
     }
-    final since = prefs.getInt('last_sync') ?? 0;
-    final changes = await db.changedSince(since);
-    final client = _clientFactory()
-      ..connectionTimeout = const Duration(seconds: 5);
+    final changes = await db.changedSince(settings.cursor);
     try {
-      final request = await client.postUrl(Uri.parse('$server/api/v1/sync'));
-      request.headers.contentType = ContentType.json;
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-      request.write(
-        jsonEncode({
-          'since': since,
-          'changes': changes.map((e) => e.toJson()).toList(),
-        }),
+      final exchange = await transport.exchange(
+        serverUrl: settings.normalizedServerUrl,
+        apiToken: settings.apiToken.trim(),
+        since: settings.cursor,
+        changes: changes,
       );
-      final response = await request.close().timeout(
-        const Duration(seconds: 10),
-      );
-      final body = await utf8.decoder.bind(response).join();
-      if (response.statusCode != 200) {
-        return SyncResult(false, 'Server: ${response.statusCode}');
-      }
-      final payload = jsonDecode(body) as Map<String, dynamic>;
-      final remote = (payload['changes'] as List).map(
-        (e) => Comic.fromMap(Map<String, Object?>.from(e as Map)),
-      );
-      await db.mergeRemote(remote);
-      await prefs.setInt('last_sync', (payload['server_time'] as num).toInt());
+      await db.mergeRemote(exchange.changes);
+      await settingsRepository.saveCursor(exchange.serverTime);
       return const SyncResult(true, 'Sinkronizirano');
+    } on SyncServerException catch (error) {
+      return SyncResult(false, 'Server: ${error.statusCode}');
     } on FormatException {
       return const SyncResult(false, 'Offline · spremljeno lokalno');
     } on ArgumentError {
       return const SyncResult(false, 'Offline · spremljeno lokalno');
     } on Exception {
       return const SyncResult(false, 'Offline · spremljeno lokalno');
-    } finally {
-      client.close(force: true);
     }
   }
 }

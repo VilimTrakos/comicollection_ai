@@ -77,11 +77,10 @@ class LocalDatabase {
     return rows.map(Comic.fromMap).toList();
   }
 
-  Future<void> upsert(Comic comic) async => (await database).insert(
-    'comics',
-    comic.toMap(),
-    conflictAlgorithm: ConflictAlgorithm.replace,
-  );
+  Future<void> upsert(Comic comic) async {
+    final db = await database;
+    await db.transaction((transaction) => _upsertComic(transaction, comic));
+  }
 
   Future<void> upsertAll(Iterable<Comic> comics) async {
     final db = await database;
@@ -148,11 +147,7 @@ class LocalDatabase {
     await db.transaction((txn) async {
       final batch = txn.batch();
       for (final comic in comics) {
-        batch.insert(
-          'comics',
-          comic.toMap(),
-          conflictAlgorithm: ConflictAlgorithm.replace,
-        );
+        _queueComicUpsert(batch, comic);
       }
       await batch.commit(noResult: true);
     });
@@ -192,11 +187,7 @@ class LocalDatabase {
           final merged = comic.coverAsset.isEmpty && localCover.isNotEmpty
               ? comic.copyWith(coverAsset: localCover)
               : comic;
-          await txn.insert(
-            'comics',
-            merged.toMap(),
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
+          await _upsertComic(txn, merged);
         }
       }
     });
@@ -208,3 +199,88 @@ class LocalDatabase {
     await db?.close();
   }
 }
+
+const _insertComicSql = '''
+  INSERT OR IGNORE INTO comics(
+    id, series, edition, number, title, publisher, year, owned, is_read,
+    condition_grade, purchase_price, estimated_value, is_duplicate, loaned_to,
+    notes, cover_asset, rating, page_count, writer, artist, deleted, updated_at
+  ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+''';
+
+const _updateComicSql = '''
+  UPDATE comics SET
+    series = ?, edition = ?, number = ?, title = ?, publisher = ?, year = ?,
+    owned = ?, is_read = ?, condition_grade = ?, purchase_price = ?,
+    estimated_value = ?, is_duplicate = ?, loaned_to = ?, notes = ?,
+    cover_asset = ?, rating = ?, page_count = ?, writer = ?, artist = ?,
+    deleted = ?, updated_at = ?
+  WHERE id = ?
+''';
+
+Future<void> _upsertComic(DatabaseExecutor database, Comic comic) async {
+  await database.rawInsert(_insertComicSql, _comicValues(comic));
+  final updated = await database.rawUpdate(
+    _updateComicSql,
+    _comicUpdateValues(comic),
+  );
+  if (updated != 1) {
+    throw StateError('Comic ${comic.id} could not be persisted.');
+  }
+}
+
+void _queueComicUpsert(Batch batch, Comic comic) {
+  batch
+    ..rawInsert(_insertComicSql, _comicValues(comic))
+    ..rawUpdate(_updateComicSql, _comicUpdateValues(comic));
+}
+
+List<Object?> _comicValues(Comic comic) => [
+  comic.id,
+  comic.series,
+  comic.edition,
+  comic.number,
+  comic.title,
+  comic.publisher,
+  comic.year,
+  comic.owned ? 1 : 0,
+  comic.read ? 1 : 0,
+  comic.condition,
+  comic.purchasePrice,
+  comic.estimatedValue,
+  comic.duplicate ? 1 : 0,
+  comic.loanedTo,
+  comic.notes,
+  comic.coverAsset,
+  comic.rating,
+  comic.pageCount,
+  comic.writer,
+  comic.artist,
+  comic.deleted ? 1 : 0,
+  comic.updatedAt,
+];
+
+List<Object?> _comicUpdateValues(Comic comic) => [
+  comic.series,
+  comic.edition,
+  comic.number,
+  comic.title,
+  comic.publisher,
+  comic.year,
+  comic.owned ? 1 : 0,
+  comic.read ? 1 : 0,
+  comic.condition,
+  comic.purchasePrice,
+  comic.estimatedValue,
+  comic.duplicate ? 1 : 0,
+  comic.loanedTo,
+  comic.notes,
+  comic.coverAsset,
+  comic.rating,
+  comic.pageCount,
+  comic.writer,
+  comic.artist,
+  comic.deleted ? 1 : 0,
+  comic.updatedAt,
+  comic.id,
+];

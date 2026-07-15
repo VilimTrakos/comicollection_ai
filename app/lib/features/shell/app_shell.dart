@@ -26,13 +26,29 @@ class Shell extends StatefulWidget {
 
 class _ShellState extends State<Shell> with WidgetsBindingObserver {
   int index = 0;
+  late Listenable _shellChanges;
   final labels = const ['POČETNA', 'MOJA KOLEKCIJA', 'TRAŽI', 'POSTAVKE'];
 
   @override
   void initState() {
     super.initState();
+    _shellChanges = _createShellChanges();
     WidgetsBinding.instance.addObserver(this);
   }
+
+  @override
+  void didUpdateWidget(covariant Shell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      _shellChanges = _createShellChanges();
+    }
+  }
+
+  Listenable _createShellChanges() => Listenable.merge([
+    widget.controller.startupChanges,
+    widget.controller.collectionChanges,
+    widget.controller.preferenceChanges,
+  ]);
 
   @override
   void dispose() {
@@ -136,7 +152,7 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
-    animation: widget.controller,
+    animation: _shellChanges,
     builder: (context, _) {
       final pages = [
         HomePage(controller: widget.controller),
@@ -353,7 +369,12 @@ class SyncBadge extends StatelessWidget {
   const SyncBadge({super.key, required this.controller});
   final AppController controller;
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: controller.syncChanges,
+    builder: (context, _) => _buildBadge(context),
+  );
+
+  Widget _buildBadge(BuildContext context) {
     final color = controller.online
         ? const Color(0xFF3EC63E)
         : const Color(0xFFE8C547);

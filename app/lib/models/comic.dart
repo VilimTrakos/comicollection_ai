@@ -1,3 +1,5 @@
+const _notProvided = Object();
+
 class Comic {
   Comic({
     required this.id,
@@ -53,18 +55,18 @@ class Comic {
     int? number,
     String? title,
     String? publisher,
-    int? year,
+    Object? year = _notProvided,
     bool? owned,
     bool? read,
     String? condition,
-    double? purchasePrice,
-    double? estimatedValue,
+    Object? purchasePrice = _notProvided,
+    Object? estimatedValue = _notProvided,
     bool? duplicate,
     String? loanedTo,
     String? notes,
     String? coverAsset,
     int? rating,
-    int? pageCount,
+    Object? pageCount = _notProvided,
     String? writer,
     String? artist,
     bool? deleted,
@@ -76,18 +78,24 @@ class Comic {
     number: number ?? this.number,
     title: title ?? this.title,
     publisher: publisher ?? this.publisher,
-    year: year ?? this.year,
+    year: identical(year, _notProvided) ? this.year : year as int?,
     owned: owned ?? this.owned,
     read: read ?? this.read,
     condition: condition ?? this.condition,
-    purchasePrice: purchasePrice ?? this.purchasePrice,
-    estimatedValue: estimatedValue ?? this.estimatedValue,
+    purchasePrice: identical(purchasePrice, _notProvided)
+        ? this.purchasePrice
+        : (purchasePrice as num?)?.toDouble(),
+    estimatedValue: identical(estimatedValue, _notProvided)
+        ? this.estimatedValue
+        : (estimatedValue as num?)?.toDouble(),
     duplicate: duplicate ?? this.duplicate,
     loanedTo: loanedTo ?? this.loanedTo,
     notes: notes ?? this.notes,
     coverAsset: coverAsset ?? this.coverAsset,
     rating: rating ?? this.rating,
-    pageCount: pageCount ?? this.pageCount,
+    pageCount: identical(pageCount, _notProvided)
+        ? this.pageCount
+        : pageCount as int?,
     writer: writer ?? this.writer,
     artist: artist ?? this.artist,
     deleted: deleted ?? this.deleted,

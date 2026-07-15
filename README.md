@@ -87,8 +87,9 @@ telefon release APK je dovoljan.
 
 ```bash
 cd app
-dart format --output=none --set-exit-if-changed lib test
+dart format --output=none --set-exit-if-changed lib test tool
 flutter analyze
+dart tool/catalog_pipeline.dart validate
 flutter test --coverage
 
 cd ../server
@@ -117,6 +118,25 @@ Featurei razgovaraju s `AppController` facadeom, a trajna pohrana, postavke,
 katalog i sinkronizacija imaju zasebne testabilne granice. `main.dart` ne sadrži
 poslovnu logiku. Stari scanner import u `lib/screens/` ostaje samo kao
 kompatibilni re-export.
+
+## Lokalni katalog
+
+Katalog i naslovnice ne uređuju se mrežnim pozivima iz aplikacije. Reproducibilni
+alat radi isključivo nad lokalnim datotekama:
+
+```bash
+cd app
+dart tool/catalog_pipeline.dart validate
+dart tool/catalog_pipeline.dart import-cover /putanja/naslovnica.jpg \
+  assets/catalog/covers/ddlu/0202.webp
+dart tool/catalog_pipeline.dart refresh-signatures
+```
+
+`validate` provjerava shemu, jedinstvene identifikatore, popis edicija, postojanje
+i WebP format svake naslovnice te podudaranje vizualnih potpisa. CI izvršava istu
+provjeru. `import-cover` lokalno normalizira orijentaciju, ograničava širinu i
+sprema WebP; nakon dodavanja ili promjene slike treba pokrenuti
+`refresh-signatures`, pregledati JSON diff i ponovno pokrenuti `validate`.
 
 ## Prototip
 

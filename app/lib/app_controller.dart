@@ -12,6 +12,24 @@ import 'models/catalog_issue.dart';
 import 'models/comic.dart';
 import 'services/catalog_service.dart';
 import 'services/sync_coordinator.dart';
+import 'state/selected_value_listenable.dart';
+
+typedef AppAppearance = ({bool darkMode, String accent, bool comicTitles});
+typedef AppStartupStatus = ({bool loading, String? error});
+typedef AppSyncStatus = ({
+  bool syncing,
+  bool online,
+  String message,
+  DateTime? lastSyncAt,
+});
+typedef AppPreferenceState = ({
+  bool darkMode,
+  String accent,
+  bool comicTitles,
+  bool showStatistics,
+  bool autoSync,
+  bool newIssueNotifications,
+});
 
 /// UI-facing application state.
 ///
@@ -68,6 +86,39 @@ class AppController extends ChangeNotifier {
           settings: this.settingsRepository,
           interval: syncInterval,
         );
+    appearanceChanges = SelectedValueListenable(
+      source: this,
+      select: () =>
+          (darkMode: darkMode, accent: accent, comicTitles: comicTitles),
+    );
+    startupChanges = SelectedValueListenable(
+      source: this,
+      select: () => (loading: loading, error: startupError),
+    );
+    collectionChanges = SelectedValueListenable(
+      source: this,
+      select: () => comics,
+    );
+    syncChanges = SelectedValueListenable(
+      source: this,
+      select: () => (
+        syncing: syncing,
+        online: online,
+        message: syncMessage,
+        lastSyncAt: lastSyncAt,
+      ),
+    );
+    preferenceChanges = SelectedValueListenable(
+      source: this,
+      select: () => (
+        darkMode: darkMode,
+        accent: accent,
+        comicTitles: comicTitles,
+        showStatistics: showStatistics,
+        autoSync: autoSync,
+        newIssueNotifications: newIssueNotifications,
+      ),
+    );
   }
 
   final LocalDatabase db;
@@ -80,6 +131,11 @@ class AppController extends ChangeNotifier {
   late final CatalogService catalogService;
   late final SyncService syncService;
   late final SyncCoordinator syncCoordinator;
+  late final SelectedValueListenable<AppAppearance> appearanceChanges;
+  late final SelectedValueListenable<AppStartupStatus> startupChanges;
+  late final SelectedValueListenable<List<Comic>> collectionChanges;
+  late final SelectedValueListenable<AppSyncStatus> syncChanges;
+  late final SelectedValueListenable<AppPreferenceState> preferenceChanges;
 
   List<Comic> comics = [];
   bool loading = true;
@@ -321,6 +377,11 @@ class AppController extends ChangeNotifier {
   @override
   void dispose() {
     syncCoordinator.dispose();
+    appearanceChanges.dispose();
+    startupChanges.dispose();
+    collectionChanges.dispose();
+    syncChanges.dispose();
+    preferenceChanges.dispose();
     super.dispose();
   }
 }

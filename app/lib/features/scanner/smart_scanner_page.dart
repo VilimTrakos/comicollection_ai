@@ -1,31 +1,20 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_barcode_scanning/google_mlkit_barcode_scanning.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'package:image/image.dart' as img;
+import 'package:google_mlkit_commons/google_mlkit_commons.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../app_controller.dart';
-import '../../data/catalog_repository.dart';
 import '../../models/catalog_issue.dart';
-import '../../services/shelf_text_matcher.dart';
+import '../../services/barcode_recognition_service.dart';
+import '../../services/cover_recognition_service.dart';
+import '../../services/shelf_recognition_service.dart';
 import '../../services/visual_signature.dart';
+import 'catalog_issue_picker.dart';
 import 'scan_review_page.dart';
-
-const _scannerRed = Color(0xFFC6291E);
-const _scannerInk = Color(0xFF131412);
-const _scannerTan = Color(0xFFB7A88F);
-
-Future<void> _deleteTemporaryFile(File file) async {
-  try {
-    await file.delete();
-  } on FileSystemException {
-    // Cache cleanup is best effort.
-  }
-}
+import 'smart_scanner_controller.dart';
+import 'smart_scanner_view.dart';
 
 class SmartScannerPage extends StatefulWidget {
   const SmartScannerPage({
@@ -33,11 +22,21 @@ class SmartScannerPage extends StatefulWidget {
     required this.controller,
     this.cameraLoader = availableCameras,
     this.pickGalleryImage,
+    this.imagePicker,
+    this.scannerController,
+    this.barcodeRecognitionService,
+    this.coverRecognitionService,
+    this.shelfRecognitionService,
   });
 
   final AppController controller;
   final Future<List<CameraDescription>> Function() cameraLoader;
   final Future<XFile?> Function()? pickGalleryImage;
+  final ImagePicker? imagePicker;
+  final SmartScannerController? scannerController;
+  final BarcodeRecognitionService? barcodeRecognitionService;
+  final CoverRecognitionService? coverRecognitionService;
+  final ShelfRecognitionService? shelfRecognitionService;
 
   @override
   State<SmartScannerPage> createState() => _SmartScannerPageState();
@@ -45,42 +44,45 @@ class SmartScannerPage extends StatefulWidget {
 
 class _SmartScannerPageState extends State<SmartScannerPage>
     with WidgetsBindingObserver {
-  final BarcodeScanner _barcodeScanner = BarcodeScanner(
-    formats: const [
-      BarcodeFormat.ean13,
-      BarcodeFormat.ean8,
-      BarcodeFormat.upca,
-      BarcodeFormat.upce,
-      BarcodeFormat.code128,
-    ],
-  );
-  final TextRecognizer _textRecognizer = TextRecognizer(
-    script: TextRecognitionScript.latin,
-  );
-  final ImagePicker _imagePicker = ImagePicker();
+  late final SmartScannerController _scanner;
+  late final BarcodeRecognitionService _barcodeRecognition;
+  late final CoverRecognitionService _coverRecognition;
+  late final ShelfRecognitionService _shelfRecognition;
+  late final ImagePicker _imagePicker;
+  late final bool _ownsScanner;
+  late final bool _ownsBarcodeRecognition;
+  late final bool _ownsShelfRecognition;
+  final CoverFrameTracker _coverTracker = CoverFrameTracker();
 
   CameraController? _camera;
   CameraDescription? _description;
   DateTime _lastAnalysis = DateTime.fromMillisecondsSinceEpoch(0);
   bool _analyzing = false;
-  bool _capturingShelf = false;
-  bool _flash = false;
-  String _message = 'Uperi u barkod ili jednu naslovnicu';
-  String? _stableCandidate;
-  int _stableFrames = 0;
-  FrameSignature? _lastSignature;
-  FrameSignature? _lockedSignature;
-  String? _lastUnknownBarcode;
-  String? _pendingBarcode;
-  bool _oldBoyNeedsSelection = false;
-  final List<CatalogIssue> _scanned = [];
 
   @override
   void initState() {
     super.initState();
+    _ownsScanner = widget.scannerController == null;
+    _scanner = widget.scannerController ?? SmartScannerController();
+    _ownsBarcodeRecognition = widget.barcodeRecognitionService == null;
+    _barcodeRecognition =
+        widget.barcodeRecognitionService ?? MlKitBarcodeRecognitionService();
+    _coverRecognition =
+        widget.coverRecognitionService ??
+        CoverRecognitionService(catalog: widget.controller.catalog);
+    _ownsShelfRecognition = widget.shelfRecognitionService == null;
+    _shelfRecognition =
+        widget.shelfRecognitionService ??
+        ShelfRecognitionService(catalog: widget.controller.catalog);
+    _imagePicker = widget.imagePicker ?? ImagePicker();
+    _scanner.addListener(_onScannerStateChanged);
     WidgetsBinding.instance.addObserver(this);
     unawaited(_initializeCamera());
     unawaited(_restoreLostGalleryImage());
+  }
+
+  void _onScannerStateChanged() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _restoreLostGalleryImage() async {
@@ -120,14 +122,14 @@ class _SmartScannerPageState extends State<SmartScannerPage>
       await controller.startImageStream(_onFrame);
     } on CameraException catch (error) {
       if (!mounted) return;
-      setState(() {
-        _message = error.code == 'CameraAccessDenied'
+      _scanner.setMessage(
+        error.code == 'CameraAccessDenied'
             ? 'Dopusti pristup kameri u postavkama uređaja.'
-            : 'Kamera se ne može otvoriti: ${error.description ?? error.code}';
-      });
+            : 'Kamera se ne može otvoriti: ${error.description ?? error.code}',
+      );
     } on Object catch (error) {
       if (!mounted) return;
-      setState(() => _message = 'Kamera se ne može otvoriti: $error');
+      _scanner.setMessage('Kamera se ne može otvoriti: $error');
     }
   }
 
@@ -137,6 +139,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     if (camera == null || !camera.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
       _camera = null;
+      _coverTracker.reset();
       unawaited(camera.dispose());
     } else if (state == AppLifecycleState.resumed && _description != null) {
       unawaited(_initializeCamera(_description));
@@ -146,7 +149,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
   void _onFrame(CameraImage image) {
     final now = DateTime.now();
     if (_analyzing ||
-        _capturingShelf ||
+        _scanner.capturing ||
         now.difference(_lastAnalysis) < const Duration(milliseconds: 420)) {
       return;
     }
@@ -171,19 +174,12 @@ class _SmartScannerPageState extends State<SmartScannerPage>
           bytesPerRow: image.planes.first.bytesPerRow,
         ),
       );
-      final barcodes = await _barcodeScanner.processImage(input);
-      for (final barcode in barcodes) {
-        final value = barcode.rawValue?.trim();
-        if (value == null || value.isEmpty) continue;
+      for (final value in await _barcodeRecognition.recognize(input)) {
         final issue = widget.controller.catalog.byBarcode(value);
         if (issue != null) {
-          _accept(issue, 'Barkod prepoznat');
-        } else if (_lastUnknownBarcode != value && mounted) {
-          _lastUnknownBarcode = value;
-          _pendingBarcode = value;
-          setState(() {
-            _message = 'Barkod $value nije povezan s lokalnim katalogom';
-          });
+          _scanner.accept(issue, 'Barkod prepoznat');
+        } else {
+          _scanner.reportUnknownBarcode(value);
         }
         return;
       }
@@ -192,52 +188,29 @@ class _SmartScannerPageState extends State<SmartScannerPage>
         image,
         rotationDegrees: description.sensorOrientation,
       );
-      final previous = _lastSignature;
-      _lastSignature = signature;
-      final locked = _lockedSignature;
-      if (locked != null) {
-        if (signature.distanceTo(locked) < 15) {
-          if (mounted) {
-            setState(() => _message = 'Pomakni sljedeći strip u kadar');
-          }
-          return;
-        }
-        _lockedSignature = null;
-      }
-      final matches = widget.controller.catalog.matchVisual(
-        visualHash: signature.visualHash,
-        colorSignature: signature.colorSignature,
+      final decision = _coverTracker.evaluate(
+        signature,
+        widget.controller.catalog.matchVisual(
+          visualHash: signature.visualHash,
+          colorSignature: signature.colorSignature,
+        ),
       );
-      if (matches.isEmpty) return;
-      final best = matches.first;
-      final margin = matches.length < 2 ? 1.0 : best.score - matches[1].score;
-      final frameStable =
-          previous != null && signature.distanceTo(previous) < 11;
-      final confident =
-          best.score >= 0.70 && (margin >= 0.018 || best.score >= 0.82);
-      if (!frameStable || !confident) {
-        _stableCandidate = null;
-        _stableFrames = 0;
-        if (mounted) {
-          setState(() => _message = 'Drži jednu naslovnicu mirno u okviru');
-        }
-        return;
-      }
-      if (_stableCandidate == best.issue.id) {
-        _stableFrames++;
-      } else {
-        _stableCandidate = best.issue.id;
-        _stableFrames = 1;
-      }
-      if (mounted) {
-        setState(() {
-          _message = 'Prepoznajem ${best.issue.series} #${best.issue.number}…';
-        });
-      }
-      if (_stableFrames >= 2) {
-        _lockedSignature = signature;
-        _stableFrames = 0;
-        _accept(best.issue, 'Naslovnica prepoznata');
+      switch (decision.status) {
+        case CoverFrameStatus.noMatch:
+          return;
+        case CoverFrameStatus.moveToNext:
+          _scanner.setMessage('Pomakni sljedeći strip u kadar');
+          return;
+        case CoverFrameStatus.holdSteady:
+          _scanner.setMessage('Drži jednu naslovnicu mirno u okviru');
+          return;
+        case CoverFrameStatus.candidate:
+          final issue = decision.issue!;
+          _scanner.setMessage('Prepoznajem ${issue.series} #${issue.number}…');
+          return;
+        case CoverFrameStatus.accepted:
+          _scanner.accept(decision.issue!, 'Naslovnica prepoznata');
+          return;
       }
     } on Object {
       // Pojedini uređaji mogu preskočiti frame ili vratiti drugi format.
@@ -245,56 +218,35 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     }
   }
 
-  void _accept(CatalogIssue issue, String source) {
-    if (_scanned.any((item) => item.id == issue.id)) {
-      if (mounted) setState(() => _message = '${issue.title} je već u popisu');
-      return;
-    }
-    if (!mounted) return;
-    setState(() {
-      _scanned.add(issue);
-      _message = '$source · ${issue.series} #${issue.number}';
-      _flash = true;
-    });
-    unawaited(
-      Future<void>.delayed(const Duration(milliseconds: 450), () {
-        if (mounted) setState(() => _flash = false);
-      }),
-    );
-  }
-
   Future<void> _captureShelf() async {
     final camera = _camera;
-    if (camera == null || !camera.value.isInitialized || _capturingShelf) {
+    if (camera == null ||
+        !camera.value.isInitialized ||
+        !_scanner.beginCapture('Fotografiram i čitam hrptove…')) {
       return;
     }
-    setState(() {
-      _capturingShelf = true;
-      _message = 'Fotografiram i čitam hrptove…';
-    });
     XFile? photo;
     try {
       if (camera.value.isStreamingImages) await camera.stopImageStream();
       photo = await camera.takePicture();
-      final issues = await _recognizeShelf(photo.path);
-      for (final issue in issues) {
-        if (_scanned.every((item) => item.id != issue.id)) _scanned.add(issue);
-      }
+      final result = await _shelfRecognition.recognizeFile(photo.path);
+      _scanner.setOldBoyNeedsSelection(result.oldBoyNeedsSelection);
+      _scanner.merge(result.issues);
       if (!mounted) return;
-      setState(() {
-        _message = issues.isEmpty
-            ? _oldBoyNeedsSelection
+      _scanner.setMessage(
+        result.issues.isEmpty
+            ? result.oldBoyNeedsSelection
                   ? 'Old Boy je vidljiv, ali broj ili naslov treba odabrati'
                   : 'Nisam pouzdano pronašao brojeve — pokušaj bliže i bez odsjaja'
-            : 'Pronađeno ${issues.length} stripova';
-      });
-      if (issues.isNotEmpty) await _openReview();
+            : 'Pronađeno ${result.issues.length} stripova',
+      );
+      if (result.issues.isNotEmpty) await _openReview();
     } on Object catch (error) {
-      if (mounted) setState(() => _message = 'Polica nije obrađena: $error');
+      if (mounted) _scanner.setMessage('Polica nije obrađena: $error');
     } finally {
-      if (photo != null) unawaited(_deleteTemporaryFile(File(photo.path)));
+      if (photo != null) unawaited(deleteTemporaryPath(photo.path));
       if (mounted) {
-        setState(() => _capturingShelf = false);
+        _scanner.endCapture();
         if (!camera.value.isStreamingImages) {
           unawaited(camera.startImageStream(_onFrame));
         }
@@ -303,12 +255,8 @@ class _SmartScannerPageState extends State<SmartScannerPage>
   }
 
   Future<void> _pickFromGallery() async {
-    if (_capturingShelf) return;
-    if (mounted) {
-      setState(() {
-        _capturingShelf = true;
-        _message = 'Odaberi naslovnicu ili fotografiju police…';
-      });
+    if (!_scanner.beginCapture('Odaberi naslovnicu ili fotografiju police…')) {
+      return;
     }
     try {
       final photo =
@@ -318,472 +266,135 @@ class _SmartScannerPageState extends State<SmartScannerPage>
                 requestFullMetadata: false,
               ));
       if (photo == null) {
-        if (mounted) setState(() => _message = 'Odabir slike je otkazan');
+        if (mounted) _scanner.setMessage('Odabir slike je otkazan');
         return;
       }
       await _processGalleryImage(photo);
     } on Object catch (error) {
       if (mounted) {
-        setState(() => _message = 'Slika iz galerije nije obrađena: $error');
+        _scanner.setMessage('Slika iz galerije nije obrađena: $error');
       }
     } finally {
-      if (mounted) setState(() => _capturingShelf = false);
+      if (mounted) _scanner.endCapture();
     }
   }
 
   Future<void> _processGalleryImage(XFile photo) async {
     if (!mounted) return;
-    setState(() => _message = 'Prepoznajem sadržaj slike…');
+    _scanner.setMessage('Prepoznajem sadržaj slike…');
     final found = <String, CatalogIssue>{};
-    final decoded = img.decodeImage(await photo.readAsBytes());
-    if (decoded != null) {
-      final signature = VisualSignatureExtractor.fromImage(decoded);
-      final matches = widget.controller.catalog.matchVisual(
-        visualHash: signature.visualHash,
-        colorSignature: signature.colorSignature,
-      );
-      if (matches.isNotEmpty) {
-        final best = matches.first;
-        final margin = matches.length < 2 ? 1.0 : best.score - matches[1].score;
-        if (best.score >= .70 && (margin >= .018 || best.score >= .82)) {
-          found[best.issue.id] = best.issue;
-        }
-      }
-    }
+    final cover = await _coverRecognition.recognizeFile(photo.path);
+    if (cover != null) found[cover.id] = cover;
 
-    for (final issue in await _recognizeShelf(photo.path)) {
+    final shelf = await _shelfRecognition.recognizeFile(photo.path);
+    _scanner.setOldBoyNeedsSelection(shelf.oldBoyNeedsSelection);
+    for (final issue in shelf.issues) {
       found[issue.id] = issue;
     }
-    for (final issue in found.values) {
-      if (_scanned.every((item) => item.id != issue.id)) _scanned.add(issue);
-    }
+    _scanner.merge(found.values);
     if (!mounted) return;
-    setState(() {
-      _message = found.isEmpty
-          ? _oldBoyNeedsSelection
+    _scanner.setMessage(
+      found.isEmpty
+          ? shelf.oldBoyNeedsSelection
                 ? 'Old Boy je vidljiv, ali broj ili naslov treba odabrati'
                 : 'Nisam pouzdano prepoznao stripove na odabranoj slici'
-          : _oldBoyNeedsSelection
+          : shelf.oldBoyNeedsSelection
           ? 'Pronađeno ${found.length}; Old Boy treba ručno potvrditi'
-          : 'Iz galerije pronađeno ${found.length} stripova';
-    });
+          : 'Iz galerije pronađeno ${found.length} stripova',
+    );
     if (found.isNotEmpty) await _openReview();
   }
 
   Future<void> _linkPendingBarcode() async {
-    final barcode = _pendingBarcode;
+    final barcode = _scanner.pendingBarcode;
     if (barcode == null || !mounted) return;
-    var query = '';
-    final issue = await showModalBottomSheet<CatalogIssue>(
+    final issue = await showCatalogIssuePicker(
       context: context,
-      isScrollControlled: true,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          final normalized = CatalogRepository.normalize(query);
-          final matches = widget.controller.catalog.issues
-              .where((item) {
-                if (normalized.isEmpty) return true;
-                return CatalogRepository.normalize(
-                  '${item.series} ${item.edition} ${item.number} ${item.title}',
-                ).contains(normalized);
-              })
-              .take(50)
-              .toList();
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.sizeOf(context).height * .78,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: TextField(
-                      autofocus: true,
-                      onChanged: (value) => setSheetState(() => query = value),
-                      decoration: InputDecoration(
-                        labelText: 'Poveži barkod $barcode',
-                        prefixIcon: const Icon(Icons.search),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: matches.length,
-                      itemBuilder: (context, index) {
-                        final item = matches[index];
-                        return ListTile(
-                          leading: item.coverAsset == null
-                              ? const Icon(Icons.menu_book)
-                              : Image.asset(
-                                  item.coverAsset!,
-                                  width: 38,
-                                  height: 52,
-                                  fit: BoxFit.cover,
-                                ),
-                          title: Text('${item.series} #${item.number}'),
-                          subtitle: Text('${item.edition} · ${item.title}'),
-                          onTap: () => Navigator.pop(sheetContext, item),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
+      issues: widget.controller.catalog.issues,
+      labelText: 'Poveži barkod $barcode',
+      searchableText: (item) =>
+          '${item.series} ${item.edition} ${item.number} ${item.title}',
+      title: (item) => '${item.series} #${item.number}',
+      subtitle: (item) => '${item.edition} · ${item.title}',
+      limit: 50,
     );
     if (issue == null) return;
     await widget.controller.linkBarcode(barcode, issue);
-    _pendingBarcode = null;
-    _accept(issue, 'Barkod povezan i prepoznat');
-  }
-
-  Future<List<CatalogIssue>> _recognizeShelf(String path) async {
-    final paths = <String>[path];
-    final temporary = <File>[];
-    try {
-      final decoded = img.decodeImage(await File(path).readAsBytes());
-      if (decoded != null) {
-        final oriented = img.bakeOrientation(decoded);
-        for (final angle in const [90.0, 270.0]) {
-          final rotated = img.copyRotate(oriented, angle: angle);
-          final file = File(
-            '${Directory.systemTemp.path}/comicollect-shelf-${DateTime.now().microsecondsSinceEpoch}-${angle.toInt()}.jpg',
-          );
-          await file.writeAsBytes(img.encodeJpg(rotated, quality: 88));
-          paths.add(file.path);
-          temporary.add(file);
-        }
-      }
-      final lines = <String>{};
-      for (final candidatePath in paths) {
-        final text = await _textRecognizer.processImage(
-          InputImage.fromFilePath(candidatePath),
-        );
-        for (final block in text.blocks) {
-          if (block.text.trim().isNotEmpty) lines.add(block.text.trim());
-          for (final line in block.lines) {
-            if (line.text.trim().isNotEmpty) lines.add(line.text.trim());
-          }
-        }
-      }
-      final result = ShelfTextMatcher.matchLines(
-        lines,
-        widget.controller.catalog.issues,
-      );
-      final hasOldBoy = lines.any(
-        (line) => CatalogRepository.normalize(line).contains('OLD BOY'),
-      );
-      _oldBoyNeedsSelection =
-          hasOldBoy && !result.any((issue) => issue.sourceEdition == 'DMLU');
-      return result;
-    } finally {
-      for (final file in temporary) {
-        unawaited(_deleteTemporaryFile(file));
-      }
-    }
+    _scanner.clearPendingBarcode();
+    _scanner.accept(issue, 'Barkod povezan i prepoznat');
   }
 
   Future<void> _selectOldBoyIssue() async {
     if (!mounted) return;
-    var query = '';
-    final issue = await showModalBottomSheet<CatalogIssue>(
+    final issue = await showCatalogIssuePicker(
       context: context,
-      isScrollControlled: true,
-      builder: (sheetContext) => StatefulBuilder(
-        builder: (context, setSheetState) {
-          final normalized = CatalogRepository.normalize(query);
-          final matches = widget.controller.catalog.issues.where((item) {
-            if (item.sourceEdition != 'DMLU') return false;
-            if (normalized.isEmpty) return true;
-            return CatalogRepository.normalize(
-              '${item.number} ${item.title}',
-            ).contains(normalized);
-          }).toList();
-          return SafeArea(
-            child: SizedBox(
-              height: MediaQuery.sizeOf(context).height * .78,
-              child: Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: TextField(
-                      autofocus: true,
-                      keyboardType: TextInputType.text,
-                      onChanged: (value) => setSheetState(() => query = value),
-                      decoration: const InputDecoration(
-                        labelText: 'Broj ili naslov Maxi / Old Boy izdanja',
-                        prefixIcon: Icon(Icons.search),
-                      ),
-                    ),
-                  ),
-                  Expanded(
-                    child: ListView.builder(
-                      itemCount: matches.length,
-                      itemBuilder: (context, index) {
-                        final item = matches[index];
-                        return ListTile(
-                          leading: item.coverAsset == null
-                              ? const Icon(Icons.menu_book)
-                              : Image.asset(
-                                  item.coverAsset!,
-                                  width: 38,
-                                  height: 52,
-                                  fit: BoxFit.cover,
-                                ),
-                          title: Text('Maxi #${item.number}'),
-                          subtitle: Text(item.title),
-                          onTap: () => Navigator.pop(sheetContext, item),
-                        );
-                      },
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          );
-        },
+      issues: widget.controller.catalog.issues.where(
+        (item) => item.sourceEdition == 'DMLU',
       ),
+      labelText: 'Broj ili naslov Maxi / Old Boy izdanja',
+      searchableText: (item) => '${item.number} ${item.title}',
+      title: (item) => 'Maxi #${item.number}',
+      subtitle: (item) => item.title,
     );
     if (issue == null) return;
-    _oldBoyNeedsSelection = false;
-    _accept(issue, 'Old Boy ručno potvrđen');
+    _scanner.setOldBoyNeedsSelection(false);
+    _scanner.accept(issue, 'Old Boy ručno potvrđen');
   }
 
   Future<void> _openReview() async {
-    if (_scanned.isEmpty || !mounted) return;
+    if (_scanner.scanned.isEmpty || !mounted) return;
     final saved = await Navigator.push<bool>(
       context,
       MaterialPageRoute(
         builder: (_) => ScanReviewPage(
           controller: widget.controller,
-          issues: List<CatalogIssue>.of(_scanned),
+          issues: List<CatalogIssue>.of(_scanner.scanned),
         ),
       ),
     );
     if (saved == true && mounted) Navigator.pop(context);
   }
 
+  Future<void> _toggleFlash() async {
+    final camera = _camera;
+    if (camera == null) return;
+    final next = camera.value.flashMode == FlashMode.torch
+        ? FlashMode.off
+        : FlashMode.torch;
+    await camera.setFlashMode(next);
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _scanner.removeListener(_onScannerStateChanged);
     final camera = _camera;
     if (camera != null) unawaited(camera.dispose());
-    unawaited(_barcodeScanner.close());
-    unawaited(_textRecognizer.close());
+    if (_ownsBarcodeRecognition) unawaited(_barcodeRecognition.close());
+    if (_ownsShelfRecognition) unawaited(_shelfRecognition.close());
+    if (_ownsScanner) _scanner.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) {
-    final camera = _camera;
-    return Scaffold(
-      backgroundColor: Colors.black,
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          if (camera != null && camera.value.isInitialized)
-            CameraPreview(camera)
-          else
-            const ColoredBox(
-              color: Color(0xFF080909),
-              child: Center(child: CircularProgressIndicator()),
-            ),
-          DecoratedBox(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                begin: Alignment.topCenter,
-                end: Alignment.bottomCenter,
-                colors: [
-                  Colors.black.withValues(alpha: .58),
-                  Colors.transparent,
-                  Colors.black.withValues(alpha: .78),
-                ],
-                stops: const [0, .25, 1],
-              ),
-            ),
-          ),
-          SafeArea(
-            child: Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8),
-                  child: Row(
-                    children: [
-                      IconButton.filledTonal(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.close),
-                      ),
-                      const Expanded(
-                        child: Text(
-                          'PAMETNO SKENIRANJE',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                      ),
-                      IconButton.filledTonal(
-                        onPressed: camera == null
-                            ? null
-                            : () async {
-                                final next =
-                                    camera.value.flashMode == FlashMode.torch
-                                    ? FlashMode.off
-                                    : FlashMode.torch;
-                                await camera.setFlashMode(next);
-                                if (mounted) setState(() {});
-                              },
-                        icon: Icon(
-                          camera?.value.flashMode == FlashMode.torch
-                              ? Icons.flash_on
-                              : Icons.flash_off,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: Center(
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      width: 230,
-                      height: 307,
-                      decoration: BoxDecoration(
-                        border: Border.all(
-                          color: _flash ? const Color(0xFF3EC63E) : _scannerRed,
-                          width: 4,
-                        ),
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      child: _flash
-                          ? const Icon(
-                              Icons.check_circle_outline,
-                              color: Color(0xFF3EC63E),
-                              size: 70,
-                            )
-                          : null,
-                    ),
-                  ),
-                ),
-                Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 18),
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 9,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: .62),
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: Text(
-                    _message,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(color: Colors.white, fontSize: 12.5),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (_pendingBarcode != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: OutlinedButton.icon(
-                      onPressed: _linkPendingBarcode,
-                      icon: const Icon(Icons.link),
-                      label: const Text('POVEŽI NEPOZNATI BARKOD'),
-                    ),
-                  ),
-                if (_oldBoyNeedsSelection)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 8),
-                    child: OutlinedButton.icon(
-                      onPressed: _selectOldBoyIssue,
-                      icon: const Icon(Icons.auto_stories_outlined),
-                      label: const Text('ODABERI OLD BOY IZDANJE'),
-                    ),
-                  ),
-                Column(
-                  children: [
-                    FilledButton.icon(
-                      onPressed: _capturingShelf ? null : _captureShelf,
-                      icon: _capturingShelf
-                          ? const SizedBox.square(
-                              dimension: 17,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.photo_camera_outlined),
-                      label: const Text('FOTOGRAFIRAJ POLICU'),
-                    ),
-                    const SizedBox(height: 6),
-                    TextButton.icon(
-                      onPressed: _capturingShelf ? null : _pickFromGallery,
-                      icon: const Icon(Icons.photo_library_outlined),
-                      label: const Text('UČITAJ IZ GALERIJE'),
-                    ),
-                  ],
-                ),
-                if (_scanned.isNotEmpty)
-                  _ScanTray(issues: _scanned, onReview: _openReview),
-                const SizedBox(height: 12),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ScanTray extends StatelessWidget {
-  const _ScanTray({required this.issues, required this.onReview});
-  final List<CatalogIssue> issues;
-  final VoidCallback onReview;
-
-  @override
-  Widget build(BuildContext context) {
-    final last = issues.last;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: _scannerInk.withValues(alpha: .96),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white24),
-      ),
-      child: Row(
-        children: [
-          if (last.coverAsset != null)
-            ClipRRect(
-              borderRadius: BorderRadius.circular(6),
-              child: Image.asset(
-                last.coverAsset!,
-                width: 37,
-                height: 50,
-                fit: BoxFit.cover,
-              ),
-            ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${issues.length} ${issues.length == 1 ? 'strip' : 'stripova'} u popisu',
-                  style: const TextStyle(fontWeight: FontWeight.w800),
-                ),
-                Text(
-                  'Zadnji: #${last.number} · ${last.title}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(color: _scannerTan, fontSize: 12),
-                ),
-              ],
-            ),
-          ),
-          TextButton(onPressed: onReview, child: const Text('PREGLEDAJ')),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => Scaffold(
+    backgroundColor: Colors.black,
+    body: SmartScannerView(
+      camera: _camera,
+      message: _scanner.message,
+      flash: _scanner.flash,
+      capturingShelf: _scanner.capturing,
+      pendingBarcode: _scanner.pendingBarcode,
+      oldBoyNeedsSelection: _scanner.oldBoyNeedsSelection,
+      scanned: _scanner.scanned,
+      onClose: () => Navigator.pop(context),
+      onToggleFlash: _toggleFlash,
+      onLinkPendingBarcode: _linkPendingBarcode,
+      onSelectOldBoy: _selectOldBoyIssue,
+      onCaptureShelf: _captureShelf,
+      onPickFromGallery: _pickFromGallery,
+      onReview: _openReview,
+    ),
+  );
 }

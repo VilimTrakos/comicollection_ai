@@ -98,6 +98,61 @@ void main() {
     },
   );
 
+  test('scoped listenables ignore unrelated controller notifications', () {
+    final controller = AppController(
+      db: _MemoryDatabase(),
+      catalog: _FakeCatalog(const []),
+    );
+    addTearDown(controller.dispose);
+    var appearanceNotifications = 0;
+    var startupNotifications = 0;
+    var collectionNotifications = 0;
+    var syncNotifications = 0;
+    var preferenceNotifications = 0;
+    controller.appearanceChanges.addListener(() => appearanceNotifications++);
+    controller.startupChanges.addListener(() => startupNotifications++);
+    controller.collectionChanges.addListener(() => collectionNotifications++);
+    controller.syncChanges.addListener(() => syncNotifications++);
+    controller.preferenceChanges.addListener(() => preferenceNotifications++);
+
+    controller.notifyListeners();
+    expect([
+      appearanceNotifications,
+      startupNotifications,
+      collectionNotifications,
+      syncNotifications,
+      preferenceNotifications,
+    ], everyElement(0));
+
+    controller
+      ..accent = 'blue'
+      ..notifyListeners();
+    expect(appearanceNotifications, 1);
+    expect(preferenceNotifications, 1);
+    expect(startupNotifications, 0);
+    expect(collectionNotifications, 0);
+    expect(syncNotifications, 0);
+
+    controller
+      ..comics = [_comic('one', 1)]
+      ..notifyListeners();
+    expect(collectionNotifications, 1);
+    expect(appearanceNotifications, 1);
+
+    controller
+      ..syncing = true
+      ..syncMessage = 'Sinkroniziram'
+      ..notifyListeners();
+    expect(syncNotifications, 1);
+    expect(collectionNotifications, 1);
+
+    controller
+      ..loading = false
+      ..notifyListeners();
+    expect(startupNotifications, 1);
+    expect(preferenceNotifications, 1);
+  });
+
   test(
     'save inserts, updates and tombstone-removes with one timestamp',
     () async {
