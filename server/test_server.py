@@ -1642,16 +1642,18 @@ class ApiTest(unittest.TestCase):
         original = self.server.store
         self.server.store = BrokenStore()
         try:
-            status, _, payload = self.request(
-                "POST",
-                "/api/v1/sync",
-                {"since": 0, "changes": []},
-                headers=self.auth(),
-            )
+            with self.assertLogs("comicollect", level="ERROR") as captured:
+                status, _, payload = self.request(
+                    "POST",
+                    "/api/v1/sync",
+                    {"since": 0, "changes": []},
+                    headers=self.auth(),
+                )
         finally:
             self.server.store = original
         self.assertEqual(status, 500)
         self.assertEqual(payload, {"error": "internal error"})
+        self.assertNotIn("database password", "\n".join(captured.output))
 
 
 if __name__ == "__main__":

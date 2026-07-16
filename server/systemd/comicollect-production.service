@@ -1,0 +1,67 @@
+[Unit]
+Description=Comicollect authenticated backend (single-node beta)
+Documentation=file:/opt/comicollect/docs/production-deployment.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=notify
+NotifyAccess=main
+User=comicollect
+Group=comicollect
+WorkingDirectory=/opt/comicollect/server
+EnvironmentFile=/etc/comicollect/production.env
+Environment=PYTHONUNBUFFERED=1
+
+ExecStartPre=/opt/comicollect/venv/bin/python -m comicollect_wsgi --check
+ExecStart=/opt/comicollect/venv/bin/gunicorn --config /opt/comicollect/server/gunicorn.conf.py
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStartSec=60
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=3
+
+UMask=0077
+StateDirectory=comicollect
+StateDirectoryMode=0750
+RuntimeDirectory=comicollect
+RuntimeDirectoryMode=0750
+
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/var/lib/comicollect /run/comicollect
+
+TasksMax=64
+LimitNOFILE=4096
+MemoryHigh=512M
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

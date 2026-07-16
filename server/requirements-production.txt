@@ -1,0 +1,3 @@
+# The application itself uses only Python's standard library.  The public
+# runtime is pinned so deployment upgrades are explicit and reviewable.
+gunicorn==26.0.0

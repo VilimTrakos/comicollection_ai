@@ -80,13 +80,15 @@ class Store:
     def connect(self) -> sqlite3.Connection:
         db = sqlite3.connect(self.path, timeout=15)
         db.row_factory = sqlite3.Row
-        db.execute("PRAGMA journal_mode=WAL")
         db.execute("PRAGMA synchronous=FULL")
         db.execute("PRAGMA busy_timeout=15000")
         return db
 
     def _initialize(self) -> None:
         with closing(self.connect()) as db, db:
+            # WAL mode persists in the database. Reapplying it on every sync
+            # connection can take an unnecessary schema lock under load.
+            db.execute("PRAGMA journal_mode=WAL")
             db.execute("""CREATE TABLE IF NOT EXISTS comics(
                 id TEXT PRIMARY KEY, series TEXT NOT NULL, edition TEXT NOT NULL,
                 number INTEGER NOT NULL, title TEXT NOT NULL, publisher TEXT NOT NULL DEFAULT '',
@@ -1514,8 +1516,11 @@ class ApiHandler(BaseHTTPRequestHandler):
             if self.path == "/api/v2/sync":
                 payload["code"] = "invalid_request"
             self.json_response(HTTPStatus.BAD_REQUEST, payload)
-        except Exception:
-            LOG.exception("sync failed")
+        except Exception as exc:
+            # Legacy mode follows the same redaction rule as production: an
+            # exception message may itself contain a credential or private
+            # database value, so routine logs keep only its class.
+            LOG.error("sync failed; failure_type=%s", type(exc).__name__)
             self.json_response(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
 
@@ -1529,22 +1534,100 @@ class Server(ThreadingHTTPServer):
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default=os.getenv("COMICOLLECT_HOST", "0.0.0.0"))
-    parser.add_argument("--port", type=int, default=int(os.getenv("COMICOLLECT_PORT", "8787")))
+    parser.add_argument(
+        "--mode",
+        choices=("production", "legacy"),
+        default=os.getenv("COMICOLLECT_MODE", "production"),
+        help="production accounts are the default; legacy keeps the shared LAN token",
+    )
+    parser.add_argument("--host")
+    parser.add_argument("--port", type=int)
     parser.add_argument("--db", type=Path, default=Path(os.getenv("COMICOLLECT_DB", "./data/comicollect.sqlite3")))
     parser.add_argument("--backup", action="store_true")
     parser.add_argument("--backup-dir", type=Path, default=Path(os.getenv("COMICOLLECT_BACKUP_DIR", "./backups")))
     args = parser.parse_args()
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(asctime)s %(levelname)s %(message)s")
+    if args.mode == "production":
+        from comicollect_backend import (
+            AuthRepository,
+            AuthService,
+            PasswordHasher,
+            ProductionApi,
+            ProductionHttpServer,
+            TenantStore,
+            load_config,
+        )
+
+        try:
+            config = load_config()
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"invalid production configuration: {exc}") from exc
+        os.umask(0o077)
+        tenants = TenantStore(
+            config.tenant_root,
+            maximum_tenant_bytes=config.tenant_storage_limit_bytes,
+            minimum_free_bytes=config.disk_reserve_bytes,
+        )
+        if args.backup and not config.auth_database.is_file():
+            raise SystemExit(
+                "production backup requires an existing auth database"
+            )
+        try:
+            repository = AuthRepository(config.auth_database)
+            auth = AuthService(
+                repository,
+                PasswordHasher(config.password_pepper, config.scrypt),
+                registration_enabled=config.registration_enabled,
+                access_ttl_ms=config.access_ttl_ms,
+                refresh_ttl_ms=config.refresh_ttl_ms,
+                session_ttl_ms=config.session_ttl_ms,
+            )
+        except (OSError, ValueError, sqlite3.DatabaseError) as exc:
+            if args.backup:
+                raise SystemExit(
+                    f"production backup validation failed: {exc}"
+                )
+            raise
+        if args.backup:
+            try:
+                print(tenants.backup_all(config.auth_database, args.backup_dir))
+            except (OSError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+                raise SystemExit(f"production backup failed: {exc}")
+            return
+        api = ProductionApi(auth, tenants)
+        host = args.host or config.host
+        port = config.port if args.port is None else args.port
+        if not 1 <= port <= 65535:
+            raise SystemExit("port must be between 1 and 65535")
+        LOG.info(
+            "production backend listening on %s:%s; auth_database=%s",
+            host,
+            port,
+            config.auth_database,
+        )
+        ProductionHttpServer((host, port), api).serve_forever()
+        return
+
+    host = args.host or os.getenv("COMICOLLECT_HOST", "0.0.0.0")
+    port = (
+        int(os.getenv("COMICOLLECT_PORT", "8787"))
+        if args.port is None
+        else args.port
+    )
+    if not 1 <= port <= 65535:
+        raise SystemExit("port must be between 1 and 65535")
     store = Store(args.db)
     if args.backup:
         print(store.backup(args.backup_dir))
         return
     token = os.getenv("COMICOLLECT_TOKEN", "")
     if len(token) < 32:
-        raise SystemExit("COMICOLLECT_TOKEN must contain at least 32 characters")
-    LOG.info("listening on %s:%s; database=%s", args.host, args.port, args.db)
-    Server((args.host, args.port), store, token).serve_forever()
+        raise SystemExit(
+            "legacy mode requires COMICOLLECT_TOKEN with at least 32 characters"
+        )
+    LOG.warning("legacy shared-token mode is enabled")
+    LOG.info("listening on %s:%s; database=%s", host, port, args.db)
+    Server((host, port), store, token).serve_forever()
 
 
 if __name__ == "__main__":

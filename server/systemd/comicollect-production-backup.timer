@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily verified Comicollect production backup
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30m
+AccuracySec=1m
+Unit=comicollect-production-backup.service
+
+[Install]
+WantedBy=timers.target
