@@ -16,7 +16,7 @@ void main() {
   setUp(() => SharedPreferences.setMockInitialValues({'auto_sync': false}));
 
   test(
-    'init loads preferences, catalog, mappings and seeds only once',
+    'init loads preferences, mappings and refreshes a catalog version once',
     () async {
       SharedPreferences.setMockInitialValues({
         'dark_mode': false,
@@ -56,9 +56,7 @@ void main() {
       expect(db.catalogSeed, hasLength(368));
       expect(db.catalogSeed.last.id, issue.id);
       final prefs = await SharedPreferences.getInstance();
-      expect(prefs.getBool('starter_catalog_v1'), isTrue);
-      expect(prefs.getBool('starter_catalog_v2'), isTrue);
-      expect(prefs.getBool('starter_catalog_v3'), isTrue);
+      expect(prefs.getInt('catalog_version'), 1);
 
       db.catalogSeed.clear();
       await controller.init();
@@ -508,6 +506,9 @@ class _FakeCatalog extends CatalogRepository {
   final Map<String, CatalogIssue> registered = {};
   int loadCalls = 0;
   Object? loadError;
+
+  @override
+  int get catalogVersion => 1;
 
   @override
   List<CatalogIssue> get issues => items;

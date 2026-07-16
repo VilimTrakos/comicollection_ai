@@ -59,6 +59,7 @@ void main() {
       expect(settings.newIssueNotifications, isTrue);
       expect(settings.lastSyncAt, isNull);
       expect(await repository.loadLastSyncAt(), isNull);
+      expect(await repository.loadCatalogVersion(), 0);
       expect(await repository.isStarterCatalogSeeded(), isFalse);
     });
 
@@ -71,6 +72,7 @@ void main() {
         'auto_sync': false,
         'new_issue_notifications': false,
         'last_sync': 1234,
+        'catalog_version': 7,
         'starter_catalog_v3': true,
       });
 
@@ -84,6 +86,7 @@ void main() {
       expect(settings.newIssueNotifications, isFalse);
       expect(settings.lastSyncAt!.millisecondsSinceEpoch, 1234);
       expect((await repository.loadLastSyncAt())!.millisecondsSinceEpoch, 1234);
+      expect(await repository.loadCatalogVersion(), 7);
       expect(await repository.isStarterCatalogSeeded(), isTrue);
     });
 
@@ -128,41 +131,124 @@ void main() {
       expect(prefs.getBool('starter_catalog_v2'), isTrue);
       expect(prefs.getBool('starter_catalog_v3'), isTrue);
     });
+
+    test('stores the applied catalog version under one stable key', () async {
+      await repository.saveCatalogVersion(4);
+
+      final prefs = await SharedPreferences.getInstance();
+      expect(await repository.loadCatalogVersion(), 4);
+      expect(prefs.getInt('catalog_version'), 4);
+      await expectLater(repository.saveCatalogVersion(0), throwsArgumentError);
+      expect(await repository.loadCatalogVersion(), 4);
+    });
   });
 
   group('CatalogService', () {
     setUp(() => SharedPreferences.setMockInitialValues({}));
 
-    test('loads, seeds once and restores persisted barcode links', () async {
-      final issue = _issue('catalog-issue', 202);
-      final database = _RecordingDatabase()..mappings['978123'] = issue.id;
-      final catalog = _RecordingCatalog([issue]);
+    test(
+      'loads, refreshes each catalog version once and restores links',
+      () async {
+        final issue = _issue('catalog-issue', 202);
+        final database = _RecordingDatabase()..mappings['978123'] = issue.id;
+        final catalog = _RecordingCatalog([issue], version: 4);
+        final service = CatalogService(
+          catalog: catalog,
+          collections: CollectionRepository(database),
+          settings: const SettingsRepository(),
+          nowMilliseconds: () => 777,
+        );
+
+        await service.initialize();
+
+        expect(catalog.loadCalls, 1);
+        expect(database.catalogSeed, hasLength(368));
+        expect(database.catalogSeed.first.id, 'catalog-DESD-1');
+        expect(database.catalogSeed.last.id, issue.id);
+        expect(
+          database.catalogSeed.every(
+            (comic) => comic.id == issue.id || comic.updatedAt == 777,
+          ),
+          isTrue,
+        );
+        expect(catalog.registered['978123'], same(issue));
+        final prefs = await SharedPreferences.getInstance();
+        expect(prefs.getInt('catalog_version'), 4);
+
+        database.catalogSeed.clear();
+        await service.initialize();
+        expect(catalog.loadCalls, 2);
+        expect(database.catalogSeed, isEmpty);
+      },
+    );
+
+    test(
+      'legacy starter flag still refreshes into the stable version key',
+      () async {
+        SharedPreferences.setMockInitialValues({'starter_catalog_v3': true});
+        final database = _RecordingDatabase();
+        final service = CatalogService(
+          catalog: _RecordingCatalog(const [], version: 1),
+          collections: CollectionRepository(database),
+          settings: const SettingsRepository(),
+          nowMilliseconds: () => 777,
+        );
+
+        await service.initialize();
+
+        expect(database.catalogSeed, hasLength(367));
+        expect(
+          (await SharedPreferences.getInstance()).getInt('catalog_version'),
+          1,
+        );
+      },
+    );
+
+    test('does not mark a catalog version when its refresh fails', () async {
+      final database = _RecordingDatabase()
+        ..catalogError = StateError('write failed');
       final service = CatalogService(
-        catalog: catalog,
+        catalog: _RecordingCatalog(const [], version: 2),
         collections: CollectionRepository(database),
         settings: const SettingsRepository(),
         nowMilliseconds: () => 777,
       );
 
-      await service.initialize();
+      await expectLater(service.initialize(), throwsStateError);
 
-      expect(catalog.loadCalls, 1);
-      expect(database.catalogSeed, hasLength(368));
-      expect(database.catalogSeed.first.id, 'catalog-DESD-1');
-      expect(database.catalogSeed.last.id, issue.id);
-      expect(
-        database.catalogSeed.every(
-          (comic) => comic.id == issue.id || comic.updatedAt == 777,
-        ),
-        isTrue,
-      );
-      expect(catalog.registered['978123'], same(issue));
-
-      database.catalogSeed.clear();
-      await service.initialize();
-      expect(catalog.loadCalls, 2);
-      expect(database.catalogSeed, isEmpty);
+      expect(await const SettingsRepository().loadCatalogVersion(), 0);
     });
+
+    test(
+      'refreshes an upgrade and never downgrades an applied catalog',
+      () async {
+        SharedPreferences.setMockInitialValues({'catalog_version': 3});
+        final upgradedDatabase = _RecordingDatabase();
+        final upgraded = CatalogService(
+          catalog: _RecordingCatalog(const [], version: 4),
+          collections: CollectionRepository(upgradedDatabase),
+          settings: const SettingsRepository(),
+          nowMilliseconds: () => 777,
+        );
+
+        await upgraded.initialize();
+        expect(upgradedDatabase.catalogSeed, hasLength(367));
+        expect(await const SettingsRepository().loadCatalogVersion(), 4);
+
+        SharedPreferences.setMockInitialValues({'catalog_version': 5});
+        final olderDatabase = _RecordingDatabase();
+        final older = CatalogService(
+          catalog: _RecordingCatalog(const [], version: 4),
+          collections: CollectionRepository(olderDatabase),
+          settings: const SettingsRepository(),
+          nowMilliseconds: () => 888,
+        );
+
+        await older.initialize();
+        expect(olderDatabase.catalogSeed, isEmpty);
+        expect(await const SettingsRepository().loadCatalogVersion(), 5);
+      },
+    );
 
     test('links a normalized barcode through storage and catalog', () async {
       final issue = _issue('one', 1);
@@ -312,6 +398,7 @@ class _RecordingDatabase extends LocalDatabase {
   final Map<String, Comic> stored = {};
   final Map<String, String> mappings = {};
   final List<Comic> catalogSeed = [];
+  Object? catalogError;
   List<Comic> lastReplaced = [];
   int allCalls = 0;
 
@@ -338,6 +425,7 @@ class _RecordingDatabase extends LocalDatabase {
 
   @override
   Future<void> upsertCatalogAll(Iterable<Comic> comics) async {
+    if (catalogError case final error?) throw error;
     catalogSeed.addAll(comics);
   }
 
@@ -351,11 +439,15 @@ class _RecordingDatabase extends LocalDatabase {
 }
 
 class _RecordingCatalog extends CatalogRepository {
-  _RecordingCatalog(this.items);
+  _RecordingCatalog(this.items, {this.version = 1});
 
   final List<CatalogIssue> items;
+  final int version;
   final Map<String, CatalogIssue> registered = {};
   int loadCalls = 0;
+
+  @override
+  int get catalogVersion => version;
 
   @override
   List<CatalogIssue> get issues => items;

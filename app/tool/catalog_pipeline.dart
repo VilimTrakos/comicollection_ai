@@ -96,6 +96,10 @@ class CatalogPipeline {
     if (payload['schemaVersion'] != 1) {
       errors.add('Unsupported or missing schemaVersion.');
     }
+    final catalogVersion = payload['catalogVersion'];
+    if (catalogVersion is! int || catalogVersion <= 0) {
+      errors.add('catalogVersion must be a positive integer.');
+    }
     for (var index = 0; index < issues.length; index++) {
       final issue = issues[index];
       final label = 'issues[$index]';

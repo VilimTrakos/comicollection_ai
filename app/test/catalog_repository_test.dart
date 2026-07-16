@@ -11,6 +11,7 @@ void main() {
     final catalog = CatalogRepository();
     await catalog.load();
 
+    expect(catalog.catalogVersion, 1);
     expect(catalog.issues, hasLength(228));
     final issue = catalog.byId('catalog-DDLU-61');
     expect(issue, isNotNull);

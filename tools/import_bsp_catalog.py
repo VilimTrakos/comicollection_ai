@@ -49,11 +49,44 @@ COVER_RE = re.compile(
     re.IGNORECASE,
 )
 PAGE_RE = re.compile(r"(?:&amp;|&)stranica=(\d+)", re.IGNORECASE)
+CATALOG_METADATA_FIELDS = (
+    "id",
+    "sourceEdition",
+    "series",
+    "edition",
+    "number",
+    "title",
+    "publisher",
+    "year",
+)
 
 
 def clean_text(value: str) -> str:
     value = TAG_RE.sub("", value)
     return " ".join(html.unescape(value).split())
+
+
+def catalog_metadata_signature(payload: object) -> str | None:
+    """Return the versioned catalog metadata independently of cover assets."""
+    if not isinstance(payload, dict):
+        return None
+    raw_issues = payload.get("issues")
+    raw_editions = payload.get("editions")
+    if not isinstance(raw_issues, list) or not isinstance(raw_editions, list):
+        return None
+    issues: list[dict[str, object]] = []
+    for raw_issue in raw_issues:
+        if not isinstance(raw_issue, dict):
+            return None
+        issues.append(
+            {field: raw_issue.get(field) for field in CATALOG_METADATA_FIELDS}
+        )
+    issues.sort(key=lambda issue: str(issue["id"]))
+    comparable = {
+        "editions": sorted(str(edition) for edition in raw_editions),
+        "issues": issues,
+    }
+    return json.dumps(comparable, ensure_ascii=False, sort_keys=True)
 
 
 def fetch(
@@ -186,7 +219,48 @@ def main() -> None:
         action="store_true",
         help="Ponovno preuzmi HTML popise umjesto korištenja lokalnog cachea.",
     )
+    parser.add_argument(
+        "--catalog-version",
+        type=int,
+        help=(
+            "Verzija kataloga ugrađena u aplikaciju. Ako nije zadana, zadržava "
+            "se verzija iz postojeće izlazne datoteke ili se koristi 1."
+        ),
+    )
     args = parser.parse_args()
+
+    existing_payload: object | None = None
+    existing_version: int | None = None
+    if args.output.exists():
+        try:
+            existing_payload = json.loads(args.output.read_text(encoding="utf-8"))
+            parsed_version = (
+                existing_payload.get("catalogVersion")
+                if isinstance(existing_payload, dict)
+                else None
+            )
+            if isinstance(parsed_version, int) and not isinstance(
+                parsed_version, bool
+            ):
+                existing_version = parsed_version
+        except (OSError, json.JSONDecodeError, AttributeError):
+            pass
+    catalog_version = args.catalog_version
+    if (
+        catalog_version is not None
+        and existing_version is not None
+        and catalog_version <= existing_version
+    ):
+        parser.error(
+            "--catalog-version mora biti veći od postojeće verzije "
+            f"{existing_version}; za identičan rebuild izostavi argument"
+        )
+    if catalog_version is None:
+        catalog_version = existing_version
+    if catalog_version is None:
+        catalog_version = 1
+    if catalog_version < 1:
+        parser.error("--catalog-version mora biti pozitivan cijeli broj")
 
     editions = [code.upper() for code in args.editions]
     issues: list[dict[str, object]] = []
@@ -200,11 +274,9 @@ def main() -> None:
             )
         )
 
-    if args.download_covers:
-        download_covers(issues, args.cache_dir / "covers")
-
     payload = {
         "schemaVersion": 1,
+        "catalogVersion": catalog_version,
         "source": {
             "name": "BSP / Strip-knjižara Asteroid B612",
             "url": BASE_URL,
@@ -213,6 +285,20 @@ def main() -> None:
         "editions": editions,
         "issues": issues,
     }
+    if (
+        args.catalog_version is None
+        and existing_version is not None
+        and catalog_metadata_signature(existing_payload)
+        != catalog_metadata_signature(payload)
+    ):
+        parser.error(
+            "sadržaj kataloga se promijenio; ponovi uvoz s "
+            f"--catalog-version {existing_version + 1} ili većom"
+        )
+
+    if args.download_covers:
+        download_covers(issues, args.cache_dir / "covers")
+
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

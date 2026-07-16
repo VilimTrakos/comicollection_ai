@@ -19,7 +19,7 @@ class CatalogService {
 
   Future<void> initialize() async {
     await catalog.load();
-    await _seedStarterCatalog();
+    await _refreshCatalogIfNeeded();
     final mappings = await collections.barcodeMappings();
     for (final entry in mappings.entries) {
       final issue = catalog.byId(entry.value);
@@ -33,8 +33,13 @@ class CatalogService {
     catalog.registerBarcode(normalized, issue);
   }
 
-  Future<void> _seedStarterCatalog() async {
-    if (await settings.isStarterCatalogSeeded()) return;
+  Future<void> _refreshCatalogIfNeeded() async {
+    final bundledVersion = catalog.catalogVersion;
+    if (bundledVersion <= 0) {
+      throw StateError('Catalog was loaded without a valid version.');
+    }
+    final appliedVersion = await settings.loadCatalogVersion();
+    if (appliedVersion >= bundledVersion) return;
     final now = nowMilliseconds();
     final issues = <Comic>[];
 
@@ -103,6 +108,6 @@ class CatalogService {
     issues.addAll(catalog.issues.map((issue) => issue.toComic()));
 
     await collections.upsertCatalogAll(issues);
-    await settings.markStarterCatalogSeeded();
+    await settings.saveCatalogVersion(bundledVersion);
   }
 }

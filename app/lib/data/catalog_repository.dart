@@ -11,10 +11,12 @@ class CoverMatch {
 }
 
 class CatalogRepository {
+  int _catalogVersion = 0;
   List<CatalogIssue> _issues = const [];
   Map<String, CatalogIssue> _byId = const {};
   Map<String, CatalogIssue> _byBarcode = const {};
 
+  int get catalogVersion => _catalogVersion;
   List<CatalogIssue> get issues => _issues;
 
   Future<void> load() async {
@@ -23,16 +25,24 @@ class CatalogRepository {
       'assets/catalog/bsp_catalog.json',
     );
     final payload = jsonDecode(source) as Map<String, dynamic>;
-    _issues = (payload['issues'] as List<dynamic>)
+    final catalogVersion = payload['catalogVersion'];
+    if (catalogVersion is! int || catalogVersion <= 0) {
+      throw const FormatException(
+        'Catalog must contain a positive integer catalogVersion.',
+      );
+    }
+    final issues = (payload['issues'] as List<dynamic>)
         .map(
           (item) => CatalogIssue.fromJson(
             Map<String, Object?>.from(item as Map<dynamic, dynamic>),
           ),
         )
         .toList(growable: false);
-    _byId = {for (final issue in _issues) issue.id: issue};
+    _catalogVersion = catalogVersion;
+    _issues = issues;
+    _byId = {for (final issue in issues) issue.id: issue};
     _byBarcode = {
-      for (final issue in _issues)
+      for (final issue in issues)
         for (final barcode in issue.barcodes) barcode: issue,
     };
   }

@@ -119,6 +119,16 @@ katalog i sinkronizacija imaju zasebne testabilne granice. `main.dart` ne sadrž
 poslovnu logiku. Stari scanner import u `lib/screens/` ostaje samo kao
 kompatibilni re-export.
 
+Lokalna schema v5 odvaja `catalog_issues`, korisničke `collection_entries` i
+1:N fizičke `copies`. Postojeći `Comic` ostaje kompatibilna projekcija za UI i
+sync, dok se stare v1-v4 baze automatski migriraju unutar jedne transakcije.
+Metadata-only katalog ne ulazi u incremental sync, a naučeni barcodeovi ostaju
+vezani uz logičko izdanje, ne uz pojedini primjerak.
+
+Sync protokol v1 još prenosi kompatibilnu agregiranu `Comic` projekciju. Detalji
+svakog od više fizičkih primjeraka zasad su potpuno trajni lokalno; njihov
+cross-device prijenos pripada zasebnoj verziji sync protokola.
+
 ## Lokalni katalog
 
 Katalog i naslovnice ne uređuju se mrežnim pozivima iz aplikacije. Reproducibilni
@@ -138,6 +148,12 @@ provjeru. `import-cover` lokalno normalizira orijentaciju, ograničava širinu i
 sprema WebP; nakon dodavanja ili promjene slike treba pokrenuti
 `refresh-signatures`, pregledati JSON diff i ponovno pokrenuti `validate`.
 
+Top-level `catalogVersion` u JSON-u monotono povećaj kada se promijene izdanja
+ili metadata koja se preslikava u lokalnu bazu. Aplikacija pamti zadnju uspješno
+primijenjenu verziju i svaki katalog osvježava točno jednom, pri čemu zadržava
+korisničko stanje kolekcije. Promjena samo unaprijed izračunatog vizualnog
+potpisa ne zahtijeva novu verziju jer se potpisi čitaju izravno iz asseta.
+
 ## Prototip
 
 Originalni dizajn ostaje u `prototype/` kao vizualna referenca. Implementacija
@@ -153,6 +169,11 @@ ulaze u APK ni repozitorij:
 ```bash
 python3 tools/import_bsp_catalog.py --download-covers
 ```
+
+Kada novi uvoz mijenja katalog koji je već bio objavljen, proslijedi i novu
+monotono veću verziju, primjerice `--catalog-version 2`. Alat odbija eksplicitnu
+verziju koja nije veća od postojeće. Bez tog argumenta zadržava
+`catalogVersion` iz postojeće izlazne datoteke za identičan rebuild.
 
 Importer pri ponovnom pokretanju koristi spremljeni HTML. Dodaj `--refresh`
 kad želiš ponovno dohvatiti aktualne BSP popise.

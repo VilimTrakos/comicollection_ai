@@ -1,4 +1,6 @@
+import '../models/collection_entry.dart';
 import '../models/comic.dart';
+import '../models/comic_copy.dart';
 import 'local_database.dart';
 
 /// Persistence boundary for the user's collection.
@@ -20,6 +22,14 @@ class CollectionRepository {
 
   Future<void> upsertCatalogAll(Iterable<Comic> comics) =>
       database.upsertCatalogAll(comics);
+
+  Future<CollectionEntry?> entryFor(String issueId) =>
+      database.collectionEntry(issueId);
+
+  Future<List<ComicCopy>> copiesFor(String issueId) =>
+      database.copiesForIssue(issueId);
+
+  Future<void> saveCopy(ComicCopy copy) => database.saveCopy(copy);
 
   Future<Map<String, String>> barcodeMappings() => database.barcodeMappings();
 

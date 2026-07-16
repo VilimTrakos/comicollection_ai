@@ -40,6 +40,8 @@ class AppSettings {
 class SettingsRepository {
   const SettingsRepository();
 
+  static const _catalogVersionKey = 'catalog_version';
+
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings(
@@ -90,6 +92,24 @@ class SettingsRepository {
     return _dateFromMilliseconds(prefs.getInt('last_sync'));
   }
 
+  Future<int> loadCatalogVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getInt(_catalogVersionKey) ?? 0;
+  }
+
+  Future<void> saveCatalogVersion(int version) async {
+    if (version <= 0) {
+      throw ArgumentError.value(version, 'version', 'must be positive');
+    }
+    final prefs = await SharedPreferences.getInstance();
+    final saved = await prefs.setInt(_catalogVersionKey, version);
+    if (!saved) {
+      throw StateError('Catalog version could not be persisted.');
+    }
+  }
+
+  /// Legacy starter flags retained only for backwards-compatible preference
+  /// reads. Catalog refreshes use the stable catalog_version key above.
   Future<bool> isStarterCatalogSeeded() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getBool('starter_catalog_v3') ?? false;
