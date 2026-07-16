@@ -1,6 +1,7 @@
 import '../models/collection_entry.dart';
 import '../models/comic.dart';
 import '../models/comic_copy.dart';
+import '../models/sync_v2.dart';
 import 'local_database.dart';
 
 /// Persistence boundary for the user's collection.
@@ -35,4 +36,16 @@ class CollectionRepository {
 
   Future<void> saveBarcodeMapping(String barcode, String comicId) =>
       database.saveBarcodeMapping(barcode, comicId);
+
+  Future<SyncUploadBatch> prepareSyncV2({
+    int limit = 100,
+    int legacyCursor = 0,
+  }) => database.prepareSyncV2(limit: limit, legacyCursor: legacyCursor);
+
+  Future<bool> hasPendingSyncV2() => database.hasPendingSyncV2();
+
+  Future<void> applySyncV2(SyncV2Exchange exchange) =>
+      database.applySyncV2(exchange);
+
+  Future<void> resetSyncV2Binding() => database.resetSyncV2Binding();
 }

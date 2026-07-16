@@ -19,14 +19,17 @@ class SyncCoordinator {
     required this.collections,
     required this.settings,
     this.interval = const Duration(minutes: 5),
+    this.continuationDelay = const Duration(seconds: 2),
   });
 
   final SyncService syncService;
   final CollectionRepository collections;
   final SettingsRepository settings;
   final Duration interval;
+  final Duration continuationDelay;
 
   Timer? _timer;
+  Timer? _continuationTimer;
   bool _running = false;
 
   bool get running => _running;
@@ -58,10 +61,26 @@ class SyncCoordinator {
     _timer = enabled
         ? Timer.periodic(interval, (_) => unawaited(action()))
         : null;
+    if (!enabled) {
+      _continuationTimer?.cancel();
+      _continuationTimer = null;
+    }
+  }
+
+  void scheduleContinuation({
+    required bool enabled,
+    required Future<void> Function() action,
+  }) {
+    _continuationTimer?.cancel();
+    _continuationTimer = enabled
+        ? Timer(continuationDelay, () => unawaited(action()))
+        : null;
   }
 
   void dispose() {
     _timer?.cancel();
     _timer = null;
+    _continuationTimer?.cancel();
+    _continuationTimer = null;
   }
 }

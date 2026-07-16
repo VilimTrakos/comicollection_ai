@@ -4,9 +4,11 @@ import 'package:comicollect/app_controller.dart';
 import 'package:comicollect/data/catalog_repository.dart';
 import 'package:comicollect/data/collection_repository.dart';
 import 'package:comicollect/data/local_database.dart';
+import 'package:comicollect/data/settings_repository.dart';
 import 'package:comicollect/data/sync_service.dart';
 import 'package:comicollect/models/catalog_issue.dart';
 import 'package:comicollect/models/comic.dart';
+import 'package:comicollect/services/sync_coordinator.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -391,6 +393,32 @@ void main() {
     expect(sync.calls, 1);
   });
 
+  test('partial sync schedules a prompt background continuation', () async {
+    final db = _MemoryDatabase();
+    final sync = _FakeSyncService(db)
+      ..result = const SyncResult(true, 'Djelomično', hasPending: true);
+    final coordinator = SyncCoordinator(
+      syncService: sync,
+      collections: CollectionRepository(db),
+      settings: const SettingsRepository(),
+      continuationDelay: const Duration(milliseconds: 20),
+    );
+    final controller = AppController(
+      db: db,
+      catalog: _FakeCatalog(const []),
+      syncService: sync,
+      syncCoordinator: coordinator,
+    )..autoSync = true;
+    addTearDown(controller.dispose);
+
+    await controller.sync();
+    sync.result = const SyncResult(true, 'Gotovo');
+    await Future<void>.delayed(const Duration(milliseconds: 60));
+
+    expect(sync.calls, 2);
+    expect(controller.syncMessage, 'Gotovo');
+  });
+
   test(
     'sync always clears its busy state when a collaborator throws',
     () async {
@@ -409,6 +437,27 @@ void main() {
       expect(sync.calls, 1);
     },
   );
+
+  test('resetSyncServerBinding clears displayed remote state', () async {
+    final db = _MemoryDatabase();
+    final sync = _FakeSyncService(db);
+    final controller =
+        AppController(
+            db: db,
+            catalog: _FakeCatalog(const []),
+            syncService: sync,
+          )
+          ..online = true
+          ..lastSyncAt = DateTime.fromMillisecondsSinceEpoch(123);
+    addTearDown(controller.dispose);
+
+    await controller.resetSyncServerBinding();
+
+    expect(sync.resetCalls, 1);
+    expect(controller.online, isFalse);
+    expect(controller.lastSyncAt, isNull);
+    expect(controller.syncMessage, 'Spremno za povezivanje s novim serverom');
+  });
 
   test(
     'updatePreferences persists every setting and controls auto-sync',
@@ -534,6 +583,7 @@ class _FakeSyncService extends SyncService {
   _FakeSyncService(super.db);
 
   int calls = 0;
+  int resetCalls = 0;
   SyncResult result = const SyncResult(true, 'Sinkronizirano');
   Future<SyncResult>? pending;
   Object? error;
@@ -543,6 +593,11 @@ class _FakeSyncService extends SyncService {
     calls++;
     if (error case final value?) throw value;
     return pending ?? result;
+  }
+
+  @override
+  Future<void> resetServerBinding() async {
+    resetCalls++;
   }
 }
 

@@ -273,6 +273,17 @@ class _SettingsPageState extends State<SettingsPage> {
                   label: const Text('SPREMI I SINKRONIZIRAJ'),
                 ),
               ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: widget.controller.syncing
+                      ? null
+                      : _connectToNewServer,
+                  icon: const Icon(Icons.swap_horiz),
+                  label: const Text('POVEŽI DRUGI ILI NOVI SERVER'),
+                ),
+              ),
             ],
           ),
         ),
@@ -324,6 +335,45 @@ class _SettingsPageState extends State<SettingsPage> {
         context,
       ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
     }
+  }
+
+  Future<void> _connectToNewServer() async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Povezati novi server?'),
+            content: const Text(
+              'Lokalna kolekcija ostaje netaknuta. Prekida se veza sa '
+              'starim serverom, a pri sljedećoj sinkronizaciji cijelo '
+              'trenutačno stanje šalje se na upisani server. Ovo koristi '
+              'samo kada je server zamijenjen ili ponovno instaliran.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('ODUSTANI'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('POVEŽI'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+
+    await widget.syncSettingsRepository.saveConnection(
+      serverUrl: server.text,
+      apiToken: token.text,
+    );
+    await widget.controller.resetSyncServerBinding();
+    await widget.controller.sync(force: true);
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
   }
 
   Widget _settingRow(String label, Widget control) => Card(

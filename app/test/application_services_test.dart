@@ -90,6 +90,18 @@ void main() {
       expect(await repository.isStarterCatalogSeeded(), isTrue);
     });
 
+    test('prefers the v2 success time over the legacy v1 cursor', () async {
+      SharedPreferences.setMockInitialValues({
+        'last_sync': 1000,
+        'last_successful_sync_v2': 2000,
+      });
+
+      final settings = await repository.load();
+
+      expect(settings.lastSyncAt!.millisecondsSinceEpoch, 2000);
+      expect((await repository.loadLastSyncAt())!.millisecondsSinceEpoch, 2000);
+    });
+
     test('updates only supplied values and preserves current state', () async {
       final current = AppSettings(
         accent: 'red',
@@ -380,6 +392,43 @@ void main() {
       await Future<void>.delayed(const Duration(milliseconds: 10));
       expect(calls, callsAtDispose);
     });
+
+    test(
+      'schedules one bounded continuation and replaces an older one',
+      () async {
+        final database = _RecordingDatabase();
+        final coordinator = SyncCoordinator(
+          syncService: _RecordingSyncService(database),
+          collections: CollectionRepository(database),
+          settings: const SettingsRepository(),
+          continuationDelay: const Duration(milliseconds: 5),
+        );
+        addTearDown(coordinator.dispose);
+        var calls = 0;
+        final continued = Completer<void>();
+
+        coordinator.scheduleContinuation(
+          enabled: true,
+          action: () async => calls += 100,
+        );
+        coordinator.scheduleContinuation(
+          enabled: true,
+          action: () async {
+            calls++;
+            continued.complete();
+          },
+        );
+        await continued.future.timeout(const Duration(seconds: 1));
+
+        expect(calls, 1);
+        coordinator.scheduleContinuation(
+          enabled: false,
+          action: () async => calls++,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(calls, 1);
+      },
+    );
   });
 }
 

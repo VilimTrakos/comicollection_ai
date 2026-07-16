@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:io';
 
+import 'package:comicollect/data/database_schema.dart';
 import 'package:comicollect/data/local_database.dart';
 import 'package:comicollect/models/comic.dart';
 import 'package:comicollect/models/comic_copy.dart';
+import 'package:comicollect/models/sync_v2.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -27,10 +30,10 @@ void main() {
 
   tearDown(() => database.close());
 
-  test('creates the normalized version 5 schema and indexes', () async {
+  test('creates the normalized version 6 schema and indexes', () async {
     final db = await database.database;
 
-    expect(await db.getVersion(), 5);
+    expect(await db.getVersion(), 6);
     final tables = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type = 'table'",
     );
@@ -41,6 +44,10 @@ void main() {
         'collection_entries',
         'copies',
         'barcode_mappings',
+        'sync_state',
+        'sync_outbox',
+        'sync_outbox_entities',
+        'sync_entity_versions',
       ]),
     );
     expect(tables.map((row) => row['name']), isNot(contains('comics')));
@@ -70,6 +77,19 @@ void main() {
       barcodeIndexes.map((row) => row['name']),
       contains('idx_barcode_mappings_issue'),
     );
+    final barcodeColumns = await db.rawQuery(
+      'PRAGMA table_info(barcode_mappings)',
+    );
+    expect(
+      barcodeColumns.map((row) => row['name']),
+      containsAll(['deleted', 'updated_at']),
+    );
+    final copyIndexes = await db.rawQuery('PRAGMA index_list(copies)');
+    expect(
+      copyIndexes.where((row) => row['origin'] == 'u'),
+      isEmpty,
+      reason: 'Copy ordinal is presentation state, not a distributed key.',
+    );
     final foreignKeys = await db.rawQuery('PRAGMA foreign_keys');
     expect(foreignKeys.single['foreign_keys'], 1);
     expect(await db.rawQuery('PRAGMA foreign_key_check'), isEmpty);
@@ -92,6 +112,39 @@ void main() {
         'updated_at': 1,
       }),
       throwsA(isA<DatabaseException>()),
+    );
+
+    await db.insert('sync_outbox', {
+      'mutation_id': 'constraint-mutation',
+      'created_at': 1,
+      'changes_json': '{}',
+    });
+    await expectLater(
+      db.update(
+        'sync_outbox',
+        {'ack_revision': 1},
+        where: 'mutation_id = ?',
+        whereArgs: ['constraint-mutation'],
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    await expectLater(
+      db.update(
+        'sync_outbox',
+        {'ack_revision': 1, 'ack_status': 'rejected'},
+        where: 'mutation_id = ?',
+        whereArgs: ['constraint-mutation'],
+      ),
+      throwsA(isA<DatabaseException>()),
+    );
+    expect(
+      await db.update(
+        'sync_outbox',
+        {'ack_revision': 1, 'ack_status': 'applied'},
+        where: 'mutation_id = ?',
+        whereArgs: ['constraint-mutation'],
+      ),
+      1,
     );
   });
 
@@ -445,6 +498,217 @@ void main() {
     },
   );
 
+  test('migrates version 5 copies and barcodes into version 6', () async {
+    final path =
+        '${Directory.systemTemp.path}/comicollect-v5-migration-${DateTime.now().microsecondsSinceEpoch}.db';
+    final old = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 5,
+        onCreate: (db, version) async {
+          await createV5Schema(db);
+          await db.insert('catalog_issues', {
+            'id': 'one',
+            'series': 'Dylan Dog',
+            'edition': 'Extra',
+            'number': 1,
+            'title': 'Broj 1',
+          });
+          await db.insert('copies', {
+            'id': 'copy-one',
+            'issue_id': 'one',
+            'ordinal': 0,
+            'condition_grade': 'VF',
+            'updated_at': 10,
+          });
+          await db.insert('barcode_mappings', {
+            'barcode': '123',
+            'issue_id': 'one',
+          });
+        },
+      ),
+    );
+    await old.close();
+
+    final migrated = LocalDatabase(pathOverride: path);
+    addTearDown(() async {
+      await migrated.close();
+      await databaseFactoryFfi.deleteDatabase(path);
+    });
+    final db = await migrated.database;
+
+    expect(await db.getVersion(), 6);
+    expect((await migrated.copiesForIssue('one')).single.id, 'copy-one');
+    await db.insert('copies', {
+      'id': 'copy-concurrent',
+      'issue_id': 'one',
+      'ordinal': 0,
+      'condition_grade': 'G',
+      'updated_at': 11,
+    });
+    expect(await migrated.copiesForIssue('one'), hasLength(2));
+    final mapping = (await db.query('barcode_mappings')).single;
+    expect(mapping['deleted'], 0);
+    expect(mapping['updated_at'], 0);
+    expect(await db.query('sync_outbox'), isEmpty);
+    expect(await db.rawQuery('PRAGMA foreign_key_check'), isEmpty);
+  });
+
+  test(
+    'version 5 migration normalizes wire values and preserves review data',
+    () async {
+      final path =
+          '${Directory.systemTemp.path}/comicollect-v5-normalize-${DateTime.now().microsecondsSinceEpoch}.db';
+      final old = await databaseFactoryFfi.openDatabase(
+        path,
+        options: OpenDatabaseOptions(
+          version: 5,
+          onCreate: (db, version) async {
+            await createV5Schema(db);
+            await db.insert('catalog_issues', {
+              'id': 'legacy-review',
+              'series': List.filled(250, 'ž').join(),
+              'edition': 'Extra',
+              'number': -7,
+              'title': '   ',
+              'publisher': '',
+              'year': 4000,
+              'metadata_updated_at': -5,
+            });
+            await db.insert('collection_entries', {
+              'issue_id': 'legacy-review',
+              'notes': List.filled(10050, 'x').join(),
+              'updated_at': -4,
+            });
+            await db.insert('copies', {
+              'id': 'legacy-review-copy',
+              'issue_id': 'legacy-review',
+              'ordinal': 0,
+              'condition_grade': 'NM',
+              'purchase_price': -3,
+              'loaned_to': List.filled(350, 'a').join(),
+              'updated_at': -3,
+            });
+            await db.insert('barcode_mappings', {
+              'barcode': ' invalid barcode ',
+              'issue_id': 'legacy-review',
+            });
+          },
+        ),
+      );
+      await old.close();
+
+      final migrated = LocalDatabase(pathOverride: path);
+      addTearDown(() async {
+        await migrated.close();
+        await databaseFactoryFfi.deleteDatabase(path);
+      });
+      final db = await migrated.database;
+      final issue = (await db.query('catalog_issues')).single;
+      expect(utf8.encode(issue['series'] as String).length, 200);
+      expect(issue['number'], 0);
+      expect(issue['title'], 'Bez naslova');
+      expect(issue['year'], isNull);
+      expect(issue['metadata_updated_at'], 0);
+      final entry = (await db.query('collection_entries')).single;
+      expect(utf8.encode(entry['notes'] as String).length, 10000);
+      expect(entry['updated_at'], 0);
+      final copy = (await db.query('copies')).single;
+      expect(copy['condition_grade'], 'F');
+      expect(copy['purchase_price'], isNull);
+      expect(utf8.encode(copy['loaned_to'] as String).length, 300);
+      expect(copy['updated_at'], 0);
+
+      final review = await migrated.syncMigrationReviewSummary();
+      expect(review.total, 4);
+      expect(review.blocked, 1);
+      final quarantine = await db.query('sync_quarantine', orderBy: 'id');
+      expect(quarantine.map((row) => row['entity_type']), [
+        'catalog_issue',
+        'collection_entry',
+        'copy_audit',
+        'barcode_mapping',
+      ]);
+      final originalCopy =
+          jsonDecode(
+                quarantine.singleWhere(
+                      (row) => row['entity_type'] == 'copy_audit',
+                    )['payload_json']
+                    as String,
+              )
+              as Map;
+      expect(originalCopy['condition_grade'], 'NM');
+      expect(originalCopy['purchase_price'], -3.0);
+
+      final pull = await migrated.prepareSyncV2();
+      expect(pull.mutations, isEmpty);
+      await migrated.applySyncV2(
+        SyncV2Exchange(
+          serverId: 'empty-server',
+          requestId: 'baseline',
+          serverTime: 1,
+          nextCursor: 0,
+          hasMore: false,
+          acknowledgements: const [],
+          changeGroups: const [],
+        ),
+      );
+      final upload = await migrated.prepareSyncV2();
+      final changes = upload.mutations.expand((mutation) => mutation.changes);
+      expect(
+        changes.map((change) => change.entityType),
+        isNot(contains(SyncEntityType.barcodeMapping)),
+      );
+      expect(
+        changes
+            .singleWhere(
+              (change) => change.entityType == SyncEntityType.comicCopy,
+            )
+            .data['condition_grade'],
+        'F',
+      );
+    },
+  );
+
+  test('failed version 5 migration rolls every table change back', () async {
+    final path =
+        '${Directory.systemTemp.path}/comicollect-v5-rollback-${DateTime.now().microsecondsSinceEpoch}.db';
+    final old = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(
+        version: 5,
+        onCreate: (db, version) async {
+          await createV5Schema(db);
+          await db.execute('CREATE TABLE sync_state(unexpected INTEGER)');
+        },
+      ),
+    );
+    await old.close();
+
+    final broken = LocalDatabase(pathOverride: path);
+    await expectLater(broken.database, throwsA(isA<DatabaseException>()));
+    await broken.close();
+
+    final restored = await databaseFactoryFfi.openDatabase(
+      path,
+      options: OpenDatabaseOptions(version: 5),
+    );
+    addTearDown(() async {
+      await restored.close();
+      await databaseFactoryFfi.deleteDatabase(path);
+    });
+    expect(await restored.getVersion(), 5);
+    final copyIndexes = await restored.rawQuery('PRAGMA index_list(copies)');
+    expect(copyIndexes.where((row) => row['origin'] == 'u'), isNotEmpty);
+    final barcodeColumns = await restored.rawQuery(
+      'PRAGMA table_info(barcode_mappings)',
+    );
+    expect(
+      barcodeColumns.map((row) => row['name']),
+      isNot(contains('deleted')),
+    );
+  });
+
   test('migrates an exact version 4 database without user data loss', () async {
     final path =
         '${Directory.systemTemp.path}/comicollect-v4-migration-${DateTime.now().microsecondsSinceEpoch}.db';
@@ -458,7 +722,7 @@ void main() {
     });
 
     final db = await migrated.database;
-    expect(await db.getVersion(), 5);
+    expect(await db.getVersion(), 6);
     expect(await db.rawQuery('PRAGMA foreign_key_check'), isEmpty);
     expect(
       (await db.rawQuery('PRAGMA integrity_check')).single['integrity_check'],
@@ -521,7 +785,7 @@ void main() {
 
     await migrated.close();
     final reopened = await migrated.database;
-    expect(await reopened.getVersion(), 5);
+    expect(await reopened.getVersion(), 6);
     expect(await reopened.query('catalog_issues'), hasLength(4));
     expect(await reopened.query('copies'), hasLength(4));
   });
@@ -611,7 +875,7 @@ void main() {
     });
     final db = await migrated.database;
 
-    expect(await db.getVersion(), 5);
+    expect(await db.getVersion(), 6);
     final comic = (await migrated.all()).single;
     expect(comic.id, 'legacy');
     expect(comic.coverAsset, isEmpty);

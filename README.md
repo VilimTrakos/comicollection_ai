@@ -19,7 +19,8 @@ Pi dostupan na kućnoj mreži.
 - ocjena, broj stranica, scenarist i crtač u lokalnoj bazi i sinkronizaciji
 - lokalne postavke teme, naglasne boje, naslova, statistike, synca i praćenja izdanja
 - lokalna SQLite baza i CSV izvoz u međuspremnik
-- tokenom zaštićen incremental sync s pravilom "novija promjena pobjeđuje"
+- revision-based sync v2 s trajnim outboxom, idempotentnim retryjem i paginacijom
+- cross-device prijenos svih primjeraka, stanja kolekcije i naučenih barkodova
 - Raspberry Pi server bez vanjskih Python paketa
 - systemd autostart, restart nakon greške i dnevni SQLite backup (14 kopija)
 
@@ -119,15 +120,29 @@ katalog i sinkronizacija imaju zasebne testabilne granice. `main.dart` ne sadrž
 poslovnu logiku. Stari scanner import u `lib/screens/` ostaje samo kao
 kompatibilni re-export.
 
-Lokalna schema v5 odvaja `catalog_issues`, korisničke `collection_entries` i
-1:N fizičke `copies`. Postojeći `Comic` ostaje kompatibilna projekcija za UI i
-sync, dok se stare v1-v4 baze automatski migriraju unutar jedne transakcije.
-Metadata-only katalog ne ulazi u incremental sync, a naučeni barcodeovi ostaju
-vezani uz logičko izdanje, ne uz pojedini primjerak.
+Lokalna schema v6 odvaja `catalog_issues`, korisničke `collection_entries` i
+1:N fizičke `copies`, te dodaje trajni sync outbox, server cursor i reviziju po
+entitetu. Stare v1-v5 baze migriraju se unutar jedne SQLite transakcije. ID
+primjerka je distribuirani identitet; ordinal služi samo za prikaz, pa dva
+offline uređaja mogu dodati primjerke bez međusobnog prepisivanja.
 
-Sync protokol v1 još prenosi kompatibilnu agregiranu `Comic` projekciju. Detalji
-svakog od više fizičkih primjeraka zasad su potpuno trajni lokalno; njihov
-cross-device prijenos pripada zasebnoj verziji sync protokola.
+Sync v2 je primarni protokol. Server dodjeljuje strogo rastuće revizije, svaku
+mutaciju primjenjuje atomarno i prepoznaje ponovljeni mutation ID nakon prekida
+mreže. Lokalni zapis i njegov outbox nastaju u istoj transakciji, a primljeni
+podaci i cursor također se spremaju zajedno. Sat uređaja zato ne odlučuje o
+konfliktima. Ugrađene naslovnice i metadata-only katalog ne šalju se na server;
+sinkroniziraju se korisničko stanje, fizički primjerci, custom izdanja i naučeni
+barkodovi. Potpuni wire contract i rollout pravila su u
+[`docs/sync-v2.md`](docs/sync-v2.md).
+
+Klijent pada na `/api/v1/sync` samo kada stari server doista nema v2 endpoint i
+još nije zapamćen identitet v2 servera. Nakon aktivacije v2 server odbija nove
+v1 upise jer ravna v1 projekcija ne može sigurno predstaviti više primjeraka;
+stari klijenti još mogu čitati kompatibilnu projekciju tijekom nadogradnje.
+Prijelaz je otporan na prekid procesa: trajni marker i outbox high-water čuvaju
+unos nastao tijekom mrežnog zahtjeva, a nakon restarta aplikacija dovršava v1
+oporavak prije v2 baselinea. Stare vrijednosti izvan strogog wire ugovora
+normaliziraju se uz sačuvan izvorni JSON i vidljivo upozorenje za pregled.
 
 ## Lokalni katalog
 

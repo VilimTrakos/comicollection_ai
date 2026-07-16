@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:comicollect/data/local_database.dart';
 import 'package:comicollect/data/sync_service.dart';
+import 'package:comicollect/data/sync_transport.dart';
 import 'package:comicollect/models/comic.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -114,7 +115,10 @@ void main() {
     final result = await _service(database).sync();
 
     expect(result.ok, isFalse);
-    expect(result.message, 'Server: 401');
+    expect(
+      result.message,
+      'Prijava na server nije uspjela · provjerite API token',
+    );
     expect((await SharedPreferences.getInstance()).getInt('last_sync'), 55);
   });
 
@@ -154,8 +158,14 @@ void main() {
 
 SyncService _service(LocalDatabase database) => SyncService(
   database,
-  clientFactory: () =>
-      HttpOverrides.runWithHttpOverrides(HttpClient.new, _RealHttpOverrides()),
+  // An explicitly supplied legacy transport intentionally tests the retained
+  // v1 compatibility path. Production construction prefers v2.
+  transport: HttpSyncTransport(
+    clientFactory: () => HttpOverrides.runWithHttpOverrides(
+      HttpClient.new,
+      _RealHttpOverrides(),
+    ),
+  ),
 );
 
 class _RealHttpOverrides extends HttpOverrides {}

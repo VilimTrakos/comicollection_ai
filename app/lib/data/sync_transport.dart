@@ -12,9 +12,38 @@ class SyncExchange {
 }
 
 class SyncServerException implements Exception {
-  const SyncServerException(this.statusCode);
+  const SyncServerException(
+    this.statusCode, {
+    this.code,
+    this.serverMessage,
+    this.responseBody,
+  });
 
   final int statusCode;
+  final String? code;
+  final String? serverMessage;
+  final String? responseBody;
+
+  factory SyncServerException.fromResponse(int statusCode, String body) {
+    String? code;
+    String? message;
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        final payload = Map<String, Object?>.from(decoded);
+        if (payload['code'] case final String value) code = value;
+        if (payload['error'] case final String value) message = value;
+      }
+    } on FormatException {
+      // Non-JSON response bodies are still retained for diagnostics.
+    }
+    return SyncServerException(
+      statusCode,
+      code: code,
+      serverMessage: message,
+      responseBody: body,
+    );
+  }
 }
 
 abstract interface class SyncTransport {
@@ -46,18 +75,20 @@ class HttpSyncTransport implements SyncTransport {
       final request = await client.postUrl(Uri.parse('$serverUrl/api/v1/sync'));
       request.headers.contentType = ContentType.json;
       request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiToken');
-      request.write(
+      final requestBody = utf8.encode(
         jsonEncode({
           'since': since,
           'changes': changes.map((comic) => comic.toJson()).toList(),
         }),
       );
+      request.contentLength = requestBody.length;
+      request.add(requestBody);
       final response = await request.close().timeout(
         const Duration(seconds: 10),
       );
       final body = await utf8.decoder.bind(response).join();
       if (response.statusCode != HttpStatus.ok) {
-        throw SyncServerException(response.statusCode);
+        throw SyncServerException.fromResponse(response.statusCode, body);
       }
       return _decode(body);
     } finally {

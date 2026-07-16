@@ -15,6 +15,7 @@ class RecordingController extends AppController {
   final List<Comic> removed = [];
   final List<AddCall> additions = [];
   int syncCalls = 0;
+  int syncResetCalls = 0;
   int initCalls = 0;
   bool? lastSyncForced;
 
@@ -75,6 +76,15 @@ class RecordingController extends AppController {
   Future<void> sync({bool force = false}) async {
     syncCalls++;
     lastSyncForced = force;
+  }
+
+  @override
+  Future<void> resetSyncServerBinding() async {
+    syncResetCalls++;
+    online = false;
+    lastSyncAt = null;
+    syncMessage = 'Spremno za povezivanje s novim serverom';
+    notifyListeners();
   }
 
   @override

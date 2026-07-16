@@ -339,6 +339,53 @@ void main() {
     },
   );
 
+  testWidgets('settings require confirmation before rebinding sync server', (
+    tester,
+  ) async {
+    final controller = RecordingController();
+    addTearDown(controller.dispose);
+    await _setPhoneSize(tester);
+    await tester.pumpWidget(
+      _app(
+        Scaffold(
+          body: SettingsPage(
+            controller: controller,
+            accountEmail: 'collector@example.test',
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await _scrollTo(tester, find.text('Lokalni sync server'));
+    await tester.tap(find.text('Lokalni sync server'));
+    await tester.pump();
+    await tester.enterText(_field('Adresa servera'), 'https://new.test');
+    await tester.enterText(_field('API token'), 'new-secret');
+    const buttonLabel = 'POVEŽI DRUGI ILI NOVI SERVER';
+    final rebindButton = find.widgetWithText(OutlinedButton, buttonLabel);
+    await _scrollTo(tester, rebindButton);
+
+    tester.widget<OutlinedButton>(rebindButton).onPressed!();
+    await tester.pump();
+    expect(find.text('Povezati novi server?'), findsOneWidget);
+    await tester.tap(find.text('ODUSTANI'));
+    await tester.pumpAndSettle();
+    expect(controller.syncResetCalls, 0);
+
+    await _scrollTo(tester, rebindButton);
+    tester.widget<OutlinedButton>(rebindButton).onPressed!();
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('POVEŽI'));
+    await tester.pumpAndSettle();
+
+    final preferences = await SharedPreferences.getInstance();
+    expect(preferences.getString('server_url'), 'https://new.test');
+    expect(preferences.getString('api_token'), 'new-secret');
+    expect(controller.syncResetCalls, 1);
+    expect(controller.lastSyncForced, isTrue);
+  });
+
   testWidgets('settings logout requires confirmation', (tester) async {
     var loggedOut = false;
     final controller = RecordingController();

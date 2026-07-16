@@ -41,6 +41,7 @@ class SettingsRepository {
   const SettingsRepository();
 
   static const _catalogVersionKey = 'catalog_version';
+  static const _v2LastSuccessfulSyncKey = 'last_successful_sync_v2';
 
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
@@ -51,7 +52,9 @@ class SettingsRepository {
       showStatistics: prefs.getBool('show_statistics') ?? true,
       autoSync: prefs.getBool('auto_sync') ?? true,
       newIssueNotifications: prefs.getBool('new_issue_notifications') ?? true,
-      lastSyncAt: _dateFromMilliseconds(prefs.getInt('last_sync')),
+      lastSyncAt: _dateFromMilliseconds(
+        prefs.getInt(_v2LastSuccessfulSyncKey) ?? prefs.getInt('last_sync'),
+      ),
     );
   }
 
@@ -89,7 +92,9 @@ class SettingsRepository {
 
   Future<DateTime?> loadLastSyncAt() async {
     final prefs = await SharedPreferences.getInstance();
-    return _dateFromMilliseconds(prefs.getInt('last_sync'));
+    return _dateFromMilliseconds(
+      prefs.getInt(_v2LastSuccessfulSyncKey) ?? prefs.getInt('last_sync'),
+    );
   }
 
   Future<int> loadCatalogVersion() async {

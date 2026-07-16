@@ -5,11 +5,13 @@ class SyncSettings {
     this.serverUrl = '',
     this.apiToken = '',
     this.cursor = 0,
+    this.lastSuccessfulSyncAt,
   });
 
   final String serverUrl;
   final String apiToken;
   final int cursor;
+  final DateTime? lastSuccessfulSyncAt;
 
   bool get isConfigured =>
       serverUrl.trim().isNotEmpty && apiToken.trim().isNotEmpty;
@@ -56,6 +58,7 @@ class SyncSettingsRepository {
   static const suggestedServerUrl = 'http://192.168.1.50:8787';
   static const _serverUrlKey = 'server_url';
   static const _cursorKey = 'last_sync';
+  static const _lastSuccessfulSyncKey = 'last_successful_sync_v2';
 
   final ApiTokenStore apiTokenStore;
 
@@ -65,6 +68,14 @@ class SyncSettingsRepository {
       serverUrl: preferences.getString(_serverUrlKey) ?? '',
       apiToken: await apiTokenStore.read(),
       cursor: preferences.getInt(_cursorKey) ?? 0,
+      lastSuccessfulSyncAt: switch (preferences.getInt(
+        _lastSuccessfulSyncKey,
+      )) {
+        final milliseconds? => DateTime.fromMillisecondsSinceEpoch(
+          milliseconds,
+        ),
+        null => null,
+      },
     );
   }
 
@@ -80,5 +91,28 @@ class SyncSettingsRepository {
   Future<void> saveCursor(int cursor) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setInt(_cursorKey, cursor);
+  }
+
+  /// Records user-facing v2 success time without changing the legacy v1
+  /// `last_sync` cursor. The authoritative v2 revision cursor lives in SQLite.
+  Future<void> saveLastSuccessfulSyncAt(DateTime timestamp) async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setInt(
+      _lastSuccessfulSyncKey,
+      timestamp.millisecondsSinceEpoch,
+    );
+  }
+
+  Future<void> clearLastSuccessfulSyncAt() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_lastSuccessfulSyncKey);
+  }
+
+  /// Clears every server-scoped cursor when the user explicitly selects a
+  /// different server. Connection values and local application data remain.
+  Future<void> resetForNewServer() async {
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.remove(_cursorKey);
+    await preferences.remove(_lastSuccessfulSyncKey);
   }
 }

@@ -1,12 +1,14 @@
+import 'dart:convert';
+
 import 'package:sqflite/sqflite.dart';
 
 /// Current local database schema.
 ///
-/// Version 5 separates immutable catalogue metadata from user collection state
-/// and physical copies.  [createV5Schema] is deliberately shared by fresh
-/// database creation and legacy migration so both paths produce identical
-/// tables, indexes and foreign keys.
-const int schemaVersion = 5;
+/// Version 5 separated immutable catalogue metadata from collection state and
+/// physical copies. Version 6 adds durable revision-based synchronization and
+/// makes copy ids, rather than presentation ordinals, distributed identities.
+const int schemaVersion = 6;
+const int normalizedSchemaVersion = 5;
 
 const String bundledOrigin = 'bundled';
 const String customOrigin = 'custom';
@@ -99,6 +101,391 @@ Future<void> createV5Schema(DatabaseExecutor db) async {
   ''');
 }
 
+/// Creates the current schema through the same v5 -> v6 migration used by
+/// installed applications. Keeping one upgrade path prevents fresh and
+/// migrated databases from drifting apart.
+Future<void> createV6Schema(DatabaseExecutor db) async {
+  await createV5Schema(db);
+  await migrateV5SchemaToV6(db);
+}
+
+/// Single sqflite upgrade dispatcher. Every branch executes inside the
+/// transaction provided by `openDatabase`, including all table rebuilds.
+Future<void> migrateDatabaseSchema(
+  DatabaseExecutor db,
+  int oldVersion,
+  int newVersion,
+) async {
+  var currentVersion = oldVersion;
+  if (currentVersion < normalizedSchemaVersion &&
+      newVersion >= normalizedSchemaVersion) {
+    await migrateLegacySchemaToV5(db, currentVersion, normalizedSchemaVersion);
+    currentVersion = normalizedSchemaVersion;
+  }
+  if (currentVersion == normalizedSchemaVersion &&
+      newVersion >= schemaVersion) {
+    await migrateV5SchemaToV6(db);
+    currentVersion = schemaVersion;
+  }
+  if (currentVersion != newVersion) {
+    throw StateError(
+      'Unsupported local database upgrade: $oldVersion -> $newVersion',
+    );
+  }
+}
+
+/// Rebuilds v5 tables whose constraints changed and installs the durable sync
+/// journal. Only SQLite syntax available on Android API 24 is used.
+Future<void> migrateV5SchemaToV6(DatabaseExecutor db) async {
+  if (!await _tableExists(db, 'copies') ||
+      !await _tableExists(db, 'barcode_mappings')) {
+    throw StateError('Version 5 collection tables are missing.');
+  }
+
+  await db.execute('''
+    CREATE TABLE sync_quarantine(
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL DEFAULT 0
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX idx_sync_quarantine_entity
+    ON sync_quarantine(entity_type, entity_id)
+  ''');
+
+  // V5 predates the wire contract and therefore allowed values which a v2
+  // server must reject. Normalize them inside the upgrade transaction so one
+  // historical row can never poison the durable outbox.
+  final issueRows = await db.query('catalog_issues');
+  for (final issue in issueRows) {
+    final issueId = _text(issue['id']);
+    final values = <String, Object?>{
+      'series': _wireText(
+        issue['series'],
+        200,
+        requiredFallback: 'Nepoznati serijal',
+      ),
+      'edition': _wireText(issue['edition'], 200),
+      'number': _wireInteger(issue['number'], 0, 1000000000),
+      'title': _wireText(issue['title'], 500, requiredFallback: 'Bez naslova'),
+      'publisher': _wireText(issue['publisher'], 200),
+      'year': _wireNullableInteger(issue['year'], 0, 3000),
+      'page_count': _wireNullableInteger(issue['page_count'], 0, 100000),
+      'writer': _wireText(issue['writer'], 300),
+      'artist': _wireText(issue['artist'], 300),
+      'metadata_updated_at': _wireInteger(
+        issue['metadata_updated_at'],
+        0,
+        _maximumSignedInt64,
+      ),
+    };
+    final changedFields = _changedFields(issue, values);
+    if (changedFields.isNotEmpty) {
+      await _quarantine(
+        db,
+        'catalog_issue',
+        issueId,
+        'Normalized v5 fields: ${changedFields.join(', ')}',
+        issue,
+      );
+    }
+    if (!_validWireIdentifier(issueId, 128)) {
+      await _quarantine(
+        db,
+        'issue',
+        issueId,
+        'Invalid v2 issue identifier',
+        issue,
+      );
+    }
+    await db.update(
+      'catalog_issues',
+      values,
+      where: 'id = ?',
+      whereArgs: [issue['id']],
+    );
+  }
+  final entryRows = await db.query('collection_entries');
+  for (final entry in entryRows) {
+    final values = <String, Object?>{
+      'rating': _wireInteger(entry['rating'], 0, 5),
+      'notes': _wireText(entry['notes'], 10000),
+      'updated_at': _wireInteger(entry['updated_at'], 0, _maximumSignedInt64),
+    };
+    final changedFields = _changedFields(entry, values);
+    if (changedFields.isNotEmpty) {
+      await _quarantine(
+        db,
+        'collection_entry',
+        _text(entry['issue_id']),
+        'Normalized v5 fields: ${changedFields.join(', ')}',
+        entry,
+      );
+    }
+    await db.update(
+      'collection_entries',
+      values,
+      where: 'issue_id = ?',
+      whereArgs: [entry['issue_id']],
+    );
+  }
+  final copyRows = await db.query('copies');
+
+  await db.execute('DROP INDEX IF EXISTS idx_copies_issue_active');
+  await db.execute('ALTER TABLE copies RENAME TO copies_v5');
+  await db.execute('''
+    CREATE TABLE copies(
+      id TEXT PRIMARY KEY NOT NULL,
+      issue_id TEXT NOT NULL,
+      ordinal INTEGER NOT NULL CHECK(ordinal >= 0),
+      active INTEGER NOT NULL DEFAULT 1 CHECK(active IN (0, 1)),
+      condition_grade TEXT NOT NULL DEFAULT 'F',
+      purchase_price REAL,
+      estimated_value REAL,
+      loaned_to TEXT NOT NULL DEFAULT '',
+      deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0, 1)),
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY(issue_id) REFERENCES catalog_issues(id) ON DELETE CASCADE
+    )
+  ''');
+  for (final copy in copyRows) {
+    final rawCondition = _text(copy['condition_grade']);
+    final copyId = _text(copy['id']);
+    final issueId = _text(copy['issue_id']);
+    final values = <String, Object?>{
+      'id': copy['id'],
+      'issue_id': copy['issue_id'],
+      'ordinal': _wireInteger(copy['ordinal'], 0, 1000000),
+      'active': _integer(copy['active']) == 0 ? 0 : 1,
+      'condition_grade': _wireConditionGrades.contains(rawCondition)
+          ? rawCondition
+          : 'F',
+      'purchase_price': _wirePrice(copy['purchase_price']),
+      'estimated_value': _wirePrice(copy['estimated_value']),
+      'loaned_to': _wireText(copy['loaned_to'], 300),
+      'deleted': _integer(copy['deleted']) == 0 ? 0 : 1,
+      'updated_at': _wireInteger(copy['updated_at'], 0, _maximumSignedInt64),
+    };
+    final changedFields = _changedFields(copy, values);
+    if (changedFields.isNotEmpty) {
+      await _quarantine(
+        db,
+        'copy_audit',
+        copyId,
+        'Normalized v5 fields: ${changedFields.join(', ')}',
+        copy,
+      );
+    }
+    if (!_validWireIdentifier(copyId, 128) ||
+        !_validWireIdentifier(issueId, 128)) {
+      await _quarantine(
+        db,
+        'copy',
+        copyId,
+        'Invalid v2 copy or issue identifier',
+        copy,
+      );
+    }
+    await db.insert('copies', values);
+  }
+  await db.execute('DROP TABLE copies_v5');
+  await db.execute('''
+    CREATE INDEX idx_copies_issue_active
+    ON copies(issue_id, active, ordinal)
+  ''');
+
+  await db.execute('''
+    ALTER TABLE barcode_mappings
+    ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0 CHECK(deleted IN (0, 1))
+  ''');
+  await db.execute('''
+    ALTER TABLE barcode_mappings
+    ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0
+  ''');
+  final mappingRows = await db.query('barcode_mappings');
+  for (final mapping in mappingRows) {
+    final barcode = _text(mapping['barcode']);
+    final issueId = _text(mapping['issue_id']);
+    if (!_validWireIdentifier(barcode, 512) ||
+        !_validWireIdentifier(issueId, 128)) {
+      await _quarantine(
+        db,
+        'barcode_mapping',
+        barcode,
+        'Invalid v2 barcode or issue identifier',
+        mapping,
+      );
+    }
+  }
+
+  await db.execute('''
+    CREATE TABLE sync_state(
+      id INTEGER PRIMARY KEY CHECK(id = 1),
+      device_id TEXT NOT NULL,
+      server_id TEXT NOT NULL DEFAULT '',
+      cursor INTEGER NOT NULL DEFAULT 0 CHECK(cursor >= 0),
+      bootstrapped INTEGER NOT NULL DEFAULT 0 CHECK(bootstrapped IN (0, 1)),
+      legacy_seeded INTEGER NOT NULL DEFAULT 0
+        CHECK(legacy_seeded IN (0, 1)),
+      baseline_complete INTEGER NOT NULL DEFAULT 0
+        CHECK(baseline_complete IN (0, 1)),
+      force_full_export INTEGER NOT NULL DEFAULT 0
+        CHECK(force_full_export IN (0, 1)),
+      legacy_cursor INTEGER NOT NULL DEFAULT 0 CHECK(legacy_cursor >= 0),
+      v1_fallback_pending INTEGER NOT NULL DEFAULT 0
+        CHECK(v1_fallback_pending IN (0, 1)),
+      v1_fallback_cursor INTEGER NOT NULL DEFAULT 0
+        CHECK(v1_fallback_cursor >= 0),
+      v1_fallback_outbox_sequence INTEGER NOT NULL DEFAULT 0
+        CHECK(v1_fallback_outbox_sequence >= 0),
+      last_success_at INTEGER
+    )
+  ''');
+  await db.execute('''
+    CREATE TABLE sync_outbox(
+      sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+      mutation_id TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL,
+      changes_json TEXT NOT NULL,
+      ack_revision INTEGER CHECK(ack_revision IS NULL OR ack_revision >= 0),
+      ack_status TEXT CHECK(
+        ack_status IS NULL OR ack_status IN ('applied', 'duplicate')
+      ),
+      CHECK(
+        (ack_revision IS NULL AND ack_status IS NULL)
+        OR (ack_revision IS NOT NULL AND ack_status IS NOT NULL)
+      )
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX idx_sync_outbox_ack_sequence
+    ON sync_outbox(ack_revision, sequence)
+  ''');
+  await db.execute('''
+    CREATE TABLE sync_outbox_entities(
+      mutation_id TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      PRIMARY KEY(mutation_id, entity_type, entity_id),
+      FOREIGN KEY(mutation_id) REFERENCES sync_outbox(mutation_id)
+        ON DELETE CASCADE
+    )
+  ''');
+  await db.execute('''
+    CREATE INDEX idx_sync_outbox_entities_lookup
+    ON sync_outbox_entities(entity_type, entity_id)
+  ''');
+  await db.execute('''
+    CREATE TABLE sync_entity_versions(
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      revision INTEGER NOT NULL CHECK(revision >= 0),
+      PRIMARY KEY(entity_type, entity_id)
+    )
+  ''');
+}
+
+const int _maximumSignedInt64 = 0x7FFFFFFFFFFFFFFF;
+const Set<String> _wireConditionGrades = {'', 'M', 'VF', 'F', 'G', 'P'};
+
+int _wireInteger(Object? value, int minimum, int maximum) =>
+    _integer(value).clamp(minimum, maximum);
+
+int? _wireNullableInteger(Object? value, int minimum, int maximum) {
+  final number = _nullableInteger(value);
+  return number != null && number >= minimum && number <= maximum
+      ? number
+      : null;
+}
+
+double? _wirePrice(Object? value) {
+  final number = _nullableDouble(value);
+  return number != null && number.isFinite && number >= 0 ? number : null;
+}
+
+String _wireText(
+  Object? value,
+  int maximumBytes, {
+  String requiredFallback = '',
+}) {
+  var text = _text(value);
+  // Re-encoding replaces malformed surrogate halves with U+FFFD.
+  text = utf8.decode(utf8.encode(text), allowMalformed: true);
+  if (text.trim().isEmpty && requiredFallback.isNotEmpty) {
+    text = requiredFallback;
+  }
+  if (utf8.encode(text).length <= maximumBytes) return text;
+
+  final output = StringBuffer();
+  var bytes = 0;
+  for (final rune in text.runes) {
+    final character = String.fromCharCode(rune);
+    final length = utf8.encode(character).length;
+    if (bytes + length > maximumBytes) break;
+    output.write(character);
+    bytes += length;
+  }
+  final truncated = output.toString();
+  if (truncated.trim().isEmpty && requiredFallback.isNotEmpty) {
+    return requiredFallback;
+  }
+  return truncated;
+}
+
+List<String> _changedFields(
+  Map<String, Object?> original,
+  Map<String, Object?> normalized,
+) => [
+  for (final entry in normalized.entries)
+    if (original[entry.key] != entry.value) entry.key,
+];
+
+bool _validWireIdentifier(String value, int maximumBytes) {
+  if (value.isEmpty || value != value.trim()) return false;
+  if (value.codeUnits.any((unit) => unit < 0x20 || unit == 0x7F)) {
+    return false;
+  }
+  try {
+    return utf8.encode(value).length <= maximumBytes;
+  } on FormatException {
+    return false;
+  }
+}
+
+Future<void> _quarantine(
+  DatabaseExecutor db,
+  String entityType,
+  String entityId,
+  String reason,
+  Map<String, Object?> original,
+) => db.insert('sync_quarantine', {
+  'entity_type': entityType,
+  'entity_id': entityId,
+  'reason': reason,
+  'payload_json': jsonEncode(_jsonSafe(original)),
+  'created_at': 0,
+});
+
+Map<String, Object?> _jsonSafe(Map<String, Object?> value) => {
+  for (final entry in value.entries) entry.key: _jsonSafeValue(entry.value),
+};
+
+Object? _jsonSafeValue(Object? value) => switch (value) {
+  null || bool _ || int _ || String _ => value,
+  double number when number.isFinite => number,
+  num number => number.toString(),
+  List list => list.map(_jsonSafeValue).toList(growable: false),
+  Map map => {
+    for (final entry in map.entries)
+      entry.key.toString(): _jsonSafeValue(entry.value),
+  },
+  _ => value.toString(),
+};
+
 /// Migrates any supported legacy `comics` schema (versions 1 through 4) to
 /// version 5 without relying on the incremental legacy ALTER TABLE steps.
 ///
@@ -111,9 +498,12 @@ Future<void> createV5Schema(DatabaseExecutor db) async {
 Future<void> migrateLegacySchemaToV5(
   DatabaseExecutor db,
   int oldVersion, [
-  int newVersion = schemaVersion,
+  int newVersion = normalizedSchemaVersion,
 ]) async {
-  if (oldVersion >= schemaVersion || newVersion < schemaVersion) return;
+  if (oldVersion >= normalizedSchemaVersion ||
+      newVersion < normalizedSchemaVersion) {
+    return;
+  }
   if (oldVersion < 1 || oldVersion > 4) {
     throw StateError('Unsupported local database version: $oldVersion');
   }

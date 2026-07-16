@@ -286,6 +286,7 @@ class AppController extends ChangeNotifier {
   Future<void> sync({bool force = false}) async {
     if ((!autoSync && !force) || syncing || syncCoordinator.running) return;
     syncing = true;
+    var continueSync = false;
     notifyListeners();
     try {
       final execution = await syncCoordinator.synchronize(
@@ -295,6 +296,7 @@ class AppController extends ChangeNotifier {
       if (execution == null) return;
       online = execution.result.ok;
       syncMessage = execution.result.message;
+      continueSync = execution.result.ok && execution.result.hasPending;
       if (execution.result.ok) {
         comics = execution.comics ?? await collectionRepository.load();
         if (execution.lastSyncAt != null) {
@@ -304,7 +306,24 @@ class AppController extends ChangeNotifier {
     } finally {
       syncing = false;
       notifyListeners();
+      if (continueSync) {
+        syncCoordinator.scheduleContinuation(
+          enabled: autoSync || force,
+          action: () => sync(force: force),
+        );
+      }
     }
+  }
+
+  Future<void> resetSyncServerBinding() async {
+    if (syncing || syncCoordinator.running) {
+      throw StateError('Sinkronizacija je trenutačno aktivna.');
+    }
+    await syncService.resetServerBinding();
+    online = false;
+    lastSyncAt = null;
+    syncMessage = 'Spremno za povezivanje s novim serverom';
+    notifyListeners();
   }
 
   Future<void> updatePreferences({

@@ -97,15 +97,32 @@ void main() {
         apiToken: ' secret ',
       );
       await repository.saveCursor(1234);
+      await repository.saveLastSuccessfulSyncAt(
+        DateTime.fromMillisecondsSinceEpoch(5678),
+      );
 
-      final settings = await repository.load();
+      var settings = await repository.load();
       expect(settings.serverUrl, 'https://server.test/');
       expect(settings.apiToken, 'secret');
       expect(settings.cursor, 1234);
+      expect(settings.lastSuccessfulSyncAt?.millisecondsSinceEpoch, 5678);
       expect(
         (await SharedPreferences.getInstance()).containsKey('api_token'),
         isFalse,
       );
+
+      await repository.clearLastSuccessfulSyncAt();
+      settings = await repository.load();
+      expect(settings.lastSuccessfulSyncAt, isNull);
+      expect(settings.cursor, 1234);
+
+      await repository.saveLastSuccessfulSyncAt(
+        DateTime.fromMillisecondsSinceEpoch(9012),
+      );
+      await repository.resetForNewServer();
+      settings = await repository.load();
+      expect(settings.cursor, 0);
+      expect(settings.lastSuccessfulSyncAt, isNull);
     });
 
     test('default token store preserves legacy preferences', () async {
