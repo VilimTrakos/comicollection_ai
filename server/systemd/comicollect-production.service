@@ -1,6 +1,6 @@
 [Unit]
 Description=Comicollect authenticated backend (single-node beta)
-Documentation=file:/opt/comicollect/docs/production-deployment.md
+Documentation=file:/opt/comicollect/current/docs/production-deployment.md
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -11,12 +11,13 @@ Type=notify
 NotifyAccess=main
 User=comicollect
 Group=comicollect
-WorkingDirectory=/opt/comicollect/server
+WorkingDirectory=/opt/comicollect/current/server
 EnvironmentFile=/etc/comicollect/production.env
 Environment=PYTHONUNBUFFERED=1
 
-ExecStartPre=/opt/comicollect/venv/bin/python -m comicollect_wsgi --check
-ExecStart=/opt/comicollect/venv/bin/gunicorn --config /opt/comicollect/server/gunicorn.conf.py
+ExecStartPre=/opt/comicollect/current/venv/bin/python -m comicollect_wsgi --check
+ExecStart=/opt/comicollect/current/venv/bin/gunicorn --config /opt/comicollect/current/server/gunicorn.conf.py
+ExecStartPost=/usr/bin/python3 /opt/comicollect/tools/production-healthcheck.py
 ExecReload=/bin/kill -HUP $MAINPID
 KillSignal=SIGTERM
 KillMode=mixed

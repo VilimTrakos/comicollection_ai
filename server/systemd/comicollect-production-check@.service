@@ -1,16 +1,18 @@
 [Unit]
-Description=Validate Comicollect production configuration and storage
-Documentation=file:/opt/comicollect/docs/production-deployment.md
+Description=Validate Comicollect production release %i
+Documentation=file:/opt/comicollect/releases/%i/docs/production-deployment.md
 After=local-fs.target
+RequiresMountsFor=/var/lib/comicollect /var/backups/comicollect
 
 [Service]
 Type=oneshot
 User=comicollect
 Group=comicollect
-WorkingDirectory=/opt/comicollect/server
+WorkingDirectory=/opt/comicollect/releases/%i/server
 EnvironmentFile=/etc/comicollect/production.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/comicollect/venv/bin/python -m comicollect_wsgi --check
+ExecStartPre=/opt/comicollect/releases/%i/venv/bin/python -m comicollect_backup snapshot-if-present --backup-dir /var/backups/comicollect
+ExecStart=/opt/comicollect/releases/%i/venv/bin/python -m comicollect_wsgi --check
 
 UMask=0077
 NoNewPrivileges=true
@@ -37,7 +39,7 @@ CapabilityBoundingSet=
 AmbientCapabilities=
 RemoveIPC=true
 IPAddressDeny=any
-ReadWritePaths=/var/lib/comicollect
+ReadWritePaths=/var/lib/comicollect /var/backups/comicollect
 TasksMax=32
 LimitNOFILE=1024
 MemoryHigh=256M

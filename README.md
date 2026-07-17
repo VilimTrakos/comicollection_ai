@@ -1,9 +1,10 @@
 # Comicollect
 
-Offline-first Flutter aplikacija za privatnu kolekciju stripova, s laganim LAN
-sync serverom za Raspberry Pi 3B+. Aplikacija radi i kada je server ugašen;
-promjene se čuvaju u SQLite bazi na telefonu i automatski sinkroniziraju kada je
-Pi dostupan na kućnoj mreži.
+Offline-first Flutter aplikacija za privatnu kolekciju stripova. Promjene se
+spremaju u SQLite na uređaju i sinkroniziraju kroz revision-based protokol kada
+je mreža dostupna. Produkcijski način rada ima stvarne račune i potpuno
+izolirane kolekcije; stari single-user Raspberry Pi LAN način ostaje kao
+eksplicitna kompatibilna opcija.
 
 ## Što je implementirano
 
@@ -21,10 +22,29 @@ Pi dostupan na kućnoj mreži.
 - lokalna SQLite baza i CSV izvoz u međuspremnik
 - revision-based sync v2 s trajnim outboxom, idempotentnim retryjem i paginacijom
 - cross-device prijenos svih primjeraka, stanja kolekcije i naučenih barkodova
-- Raspberry Pi server bez vanjskih Python paketa
-- systemd autostart, restart nakon greške i dnevni SQLite backup (14 kopija)
+- registracija/prijava, kratkotrajni access tokeni i rotirajuće refresh sesije
+- Android Keystore-backed spremanje refresh credentiala; access token je samo u memoriji
+- zasebna auth baza i zasebna Sync v2 baza za svaki račun
+- produkcijski Gunicorn/nginx/systemd profil s TLS granicom i throttlingom
+- kompatibilni Raspberry Pi LAN server bez vanjskih Python paketa
+- online SQLite backup cijele account generacije s lokalnom rotacijom 14 kopija
 
-## 1. Server na Raspberry Pi
+## 1. Produkcijski backend
+
+Javni backend pokreće se iza nginx TLS reverse proxyja kao jedan ograničeni
+Gunicorn `gthread` worker. Konfiguracija je fail-closed: bez pepper tajne od
+najmanje 32 bajta proces se ne pokreće, a javna registracija mora se uključiti
+eksplicitno. Potpuna priprema hosta, systemd hardening, nginx predložak, backup i
+restore postupak opisani su u
+[`docs/production-deployment.md`](docs/production-deployment.md). Account i
+HTTP ugovor opisan je u [`docs/backend-auth.md`](docs/backend-auth.md).
+
+Ovo je profesionalna single-node osnova za kontrolirani beta rollout. Prije
+horizontalnog skaliranja potrebni su PostgreSQL i zajednički rate limiter;
+prije javne registracije potrebni su i potvrda e-maila, oporavak lozinke te
+privacy/export/delete workflow.
+
+## 2. Kompatibilni Raspberry Pi LAN server
 
 Pi i telefon trebaju biti na istoj kućnoj mreži. Kopiraj direktorij `server` na
 Pi i pokreni samo:
@@ -34,8 +54,8 @@ cd server
 sudo ./install.sh
 ```
 
-Skripta ispisuje adresu servera i jedinstveni API token. Spremi ih u
-**Postavke** aplikacije. Servis se automatski pokreće nakon restarta Pi-ja.
+Skripta zadržava postojeći `COMICOLLECT_MODE=legacy`, ispisuje adresu servera i
+jedinstveni API token. Servis se automatski pokreće nakon restarta Pi-ja.
 
 Korisne administratorske naredbe:
 
@@ -53,21 +73,25 @@ prosljeđuj na internet; ova konfiguracija je namjerno samo za pouzdani kućni L
 Ponovno pokretanje `sudo ./install.sh` sigurno nadogradi server i zadržava bazu,
 token i backupe.
 
-## 2. Android aplikacija
+## 3. Android aplikacija
 
-Razvojni APK:
+Razvoj s lokalnim backendom na Android emulatoru:
 
 ```bash
 cd app
 flutter pub get
-flutter run
+flutter run --dart-define=COMICOLLECT_API_URL=http://10.0.2.2:8787
 ```
+
+Debug build dopušta plaintext HTTP samo za `localhost`, `127.0.0.1` i Android
+emulator adresu `10.0.2.2`. Release build prihvaća samo HTTPS origin.
 
 Instalacijski release APK:
 
 ```bash
 cd app
-flutter build apk --release
+flutter build apk --release \
+  --dart-define=COMICOLLECT_API_URL=https://api.example.com
 # build/app/outputs/flutter-apk/app-release.apk
 ```
 
@@ -75,7 +99,8 @@ Za Google Play napravi vlastiti upload key prema Flutter/Play uputama, dodaj
 release signing konfiguraciju izvan repozitorija i izgradi AAB:
 
 ```bash
-flutter build appbundle --release
+flutter build appbundle --release \
+  --dart-define=COMICOLLECT_API_URL=https://api.example.com
 # build/app/outputs/bundle/release/app-release.aab
 ```
 
@@ -94,7 +119,7 @@ dart tool/catalog_pipeline.dart validate
 flutter test --coverage
 
 cd ../server
-python3 -m unittest -v test_server.py
+python3 -m unittest discover -v
 ```
 
 Isti se paket automatski izvršava u GitHub Actionsu pri svakom pushu i pull
@@ -109,11 +134,12 @@ pregledaj PNG razlike prije commita.
 - `lib/comicollect.dart` — javni package API za testove i druge klijente
 - `lib/app_controller.dart` — tanki UI facade i `ChangeNotifier` stanje
 - `lib/app/` — korijenski `MaterialApp`
+- `lib/config/` — validirana build/runtime konfiguracija
 - `lib/features/` — auth, shell, home, collection, comics, search, scanner i settings
 - `lib/ui/` — tema i zajednički prezentacijski widgeti
-- `lib/data/` — SQLite, mrežni transport te collection/settings repozitoriji
+- `lib/data/` — SQLite, auth/sync transporti te collection/settings repozitoriji
 - `lib/models/` — domenski modeli bez UI ovisnosti
-- `lib/services/` — inicijalizacija kataloga i koordinacija sinkronizacije/timera
+- `lib/services/` — auth sesija, inicijalizacija kataloga i sync koordinacija
 
 Featurei razgovaraju s `AppController` facadeom, a trajna pohrana, postavke,
 katalog i sinkronizacija imaju zasebne testabilne granice. `main.dart` ne sadrži

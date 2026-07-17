@@ -1,16 +1,17 @@
 [Unit]
 Description=Verified backup of the Comicollect production backend
-Documentation=file:/opt/comicollect/docs/production-deployment.md
+Documentation=file:/opt/comicollect/current/docs/production-deployment.md
 After=local-fs.target
+RequiresMountsFor=/var/lib/comicollect /var/backups/comicollect
 
 [Service]
 Type=oneshot
 User=comicollect
 Group=comicollect
-WorkingDirectory=/opt/comicollect/server
+WorkingDirectory=/opt/comicollect/current/server
 EnvironmentFile=/etc/comicollect/production.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/comicollect/venv/bin/python /opt/comicollect/server/comicollect_server.py --mode production --backup --backup-dir /var/backups/comicollect
+ExecStart=/opt/comicollect/current/venv/bin/python -m comicollect_backup create --backup-dir /var/backups/comicollect
 
 UMask=0077
 NoNewPrivileges=true
