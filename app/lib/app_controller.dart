@@ -150,10 +150,14 @@ class AppController extends ChangeNotifier {
   bool autoSync = true;
   bool newIssueNotifications = true;
   DateTime? lastSyncAt;
+  bool _acceptingOperations = true;
+  final Set<Future<void>> _activeOperations = {};
   bool _acceptingSync = true;
   Future<void>? _activeSync;
 
-  Future<void> init() async {
+  Future<void> init() => _runOperation(_initialize);
+
+  Future<void> _initialize() async {
     loading = true;
     startupError = null;
     notifyListeners();
@@ -174,19 +178,24 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> save(Comic comic) async {
+  Future<void> save(Comic comic) => _runOperation(() => _save(comic));
+
+  Future<void> _save(Comic comic) async {
     final fresh = comic.copyWith(updatedAt: _nowMilliseconds());
     _publishOptimistic(fresh);
     try {
       await collectionRepository.upsert(fresh);
     } on Object {
-      await reload();
+      await _reload();
       rethrow;
     }
     unawaited(sync());
   }
 
-  Future<void> saveScanResults(Map<CatalogIssue, bool> results) async {
+  Future<void> saveScanResults(Map<CatalogIssue, bool> results) =>
+      _runOperation(() => _saveScanResults(results));
+
+  Future<void> _saveScanResults(Map<CatalogIssue, bool> results) async {
     final now = _nowMilliseconds();
     final currentById = {for (final comic in comics) comic.id: comic};
     final changes = <Comic>[];
@@ -201,11 +210,14 @@ class AppController extends ChangeNotifier {
       );
     }
     await collectionRepository.replaceAll(changes);
-    await reload();
+    await _reload();
     unawaited(sync());
   }
 
-  Future<void> saveAll(Iterable<Comic> changes) async {
+  Future<void> saveAll(Iterable<Comic> changes) =>
+      _runOperation(() => _saveAll(changes));
+
+  Future<void> _saveAll(Iterable<Comic> changes) async {
     final now = _nowMilliseconds();
     final fresh = changes
         .map((comic) => comic.copyWith(updatedAt: now))
@@ -223,14 +235,14 @@ class AppController extends ChangeNotifier {
     try {
       await collectionRepository.replaceAll(fresh);
     } on Object {
-      await reload();
+      await _reload();
       rethrow;
     }
     unawaited(sync());
   }
 
   Future<void> linkBarcode(String barcode, CatalogIssue issue) =>
-      catalogService.linkBarcode(barcode, issue);
+      _runOperation(() => catalogService.linkBarcode(barcode, issue));
 
   Future<void> add({
     required String series,
@@ -251,8 +263,8 @@ class AppController extends ChangeNotifier {
     int? pageCount,
     String writer = '',
     String artist = '',
-  }) async {
-    await save(
+  }) => _runOperation(
+    () => _save(
       Comic(
         id: _idGenerator(),
         series: series.trim(),
@@ -275,12 +287,15 @@ class AppController extends ChangeNotifier {
         artist: artist.trim(),
         updatedAt: _nowMilliseconds(),
       ),
-    );
-  }
+    ),
+  );
 
-  Future<void> remove(Comic comic) => save(comic.copyWith(deleted: true));
+  Future<void> remove(Comic comic) =>
+      _runOperation(() => _save(comic.copyWith(deleted: true)));
 
-  Future<void> reload() async {
+  Future<void> reload() => _runOperation(_reload);
+
+  Future<void> _reload() async {
     comics = await collectionRepository.load();
     notifyListeners();
   }
@@ -331,7 +346,10 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> resetSyncServerBinding() async {
+  Future<void> resetSyncServerBinding() =>
+      _runOperation(_resetSyncServerBinding);
+
+  Future<void> _resetSyncServerBinding() async {
     if (syncing || syncCoordinator.running) {
       throw StateError('Sinkronizacija je trenutačno aktivna.');
     }
@@ -343,6 +361,24 @@ class AppController extends ChangeNotifier {
   }
 
   Future<void> updatePreferences({
+    bool? darkMode,
+    String? accent,
+    bool? comicTitles,
+    bool? showStatistics,
+    bool? autoSync,
+    bool? newIssueNotifications,
+  }) => _runOperation(
+    () => _updatePreferences(
+      darkMode: darkMode,
+      accent: accent,
+      comicTitles: comicTitles,
+      showStatistics: showStatistics,
+      autoSync: autoSync,
+      newIssueNotifications: newIssueNotifications,
+    ),
+  );
+
+  Future<void> _updatePreferences({
     bool? darkMode,
     String? accent,
     bool? comicTitles,
@@ -409,20 +445,53 @@ class AppController extends ChangeNotifier {
     syncCoordinator.schedule(enabled: autoSync, action: sync);
   }
 
-  /// Prevents new synchronization and drains an exchange already in flight.
-  /// App runtimes call this before disposing state or closing their database.
+  Future<void> _runOperation(Future<void> Function() action) {
+    if (!_acceptingOperations) {
+      return Future.error(StateError('Application runtime is shutting down.'));
+    }
+    late final Future<void> operation;
+    operation = Future<void>.sync(action).whenComplete(() {
+      _activeOperations.remove(operation);
+    });
+    _activeOperations.add(operation);
+    return operation;
+  }
+
+  /// Prevents new work and drains every operation which may still touch this
+  /// runtime's database, preferences, authentication or notifier state.
   Future<void> quiesce() async {
+    _acceptingOperations = false;
     _acceptingSync = false;
-    final active = _activeSync;
-    try {
-      await syncCoordinator.quiesce();
-    } finally {
-      await active;
+    final activeSync = _activeSync;
+    Object? failure;
+    StackTrace? failureStack;
+
+    Future<void> drain(Future<dynamic>? operation) async {
+      if (operation == null) return;
+      try {
+        await operation;
+      } on Object catch (error, stackTrace) {
+        if (failure == null) {
+          failure = error;
+          failureStack = stackTrace;
+        }
+      }
+    }
+
+    await drain(syncCoordinator.quiesce());
+    await drain(activeSync);
+    while (_activeOperations.isNotEmpty) {
+      final active = List<Future<void>>.of(_activeOperations);
+      await Future.wait(active.map(drain));
+    }
+    if (failure case final error?) {
+      Error.throwWithStackTrace(error, failureStack!);
     }
   }
 
   @override
   void dispose() {
+    _acceptingOperations = false;
     _acceptingSync = false;
     syncCoordinator.dispose();
     appearanceChanges.dispose();

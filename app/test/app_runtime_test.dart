@@ -173,6 +173,37 @@ void main() {
     await Future.wait([first, second]);
     expect(database.closeCalls, 1);
   });
+
+  test('runtime drains an in-flight collection save before close', () async {
+    final database = _CloseTrackingDatabase();
+    final collections = _BlockingUpsertCollectionRepository(database);
+    final controller = AppController(
+      db: database,
+      collectionRepository: collections,
+    )..autoSync = false;
+    final runtime = AppRuntime(controller: controller, database: database);
+
+    final save = controller.save(
+      Comic(
+        id: 'issue-1',
+        series: 'Dylan Dog',
+        edition: 'Extra',
+        number: 1,
+        title: 'Zora živih mrtvaca',
+        owned: true,
+        updatedAt: 1,
+      ),
+    );
+    await collections.started.future;
+    final close = runtime.close();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(database.closed, isFalse);
+
+    collections.pending.complete();
+    await Future.wait([save, close]);
+    expect(database.closed, isTrue);
+  });
 }
 
 final class _CloseTrackingDatabase extends LocalDatabase {
@@ -235,6 +266,19 @@ final class _BlockingCollectionRepository extends CollectionRepository {
 
   @override
   Future<List<Comic>> load() {
+    if (!started.isCompleted) started.complete();
+    return pending.future;
+  }
+}
+
+final class _BlockingUpsertCollectionRepository extends CollectionRepository {
+  _BlockingUpsertCollectionRepository(super.database);
+
+  final started = Completer<void>();
+  final pending = Completer<void>();
+
+  @override
+  Future<void> upsert(Comic comic) {
     if (!started.isCompleted) started.complete();
     return pending.future;
   }

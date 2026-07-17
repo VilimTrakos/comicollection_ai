@@ -3,6 +3,7 @@ import 'package:comicollect/data/api_token_store.dart';
 import 'package:comicollect/data/settings_repository.dart';
 import 'package:comicollect/data/sync_settings_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as path;
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
@@ -13,10 +14,13 @@ void main() {
       directoryProvider: () async => '/data/databases',
     );
 
-    expect(await resolver.guest(), '/data/databases/comicollect.db');
+    expect(
+      await resolver.guest(),
+      path.join('/data/databases', 'comicollect.db'),
+    );
     expect(
       await resolver.account('account-1'),
-      '/data/databases/comicollect_account_account-1.db',
+      path.join('/data/databases', 'comicollect_account_account-1.db'),
     );
     expect(
       await resolver.account('account-2'),

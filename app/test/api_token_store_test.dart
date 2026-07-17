@@ -84,6 +84,22 @@ void main() {
     expect(secure.value, isNull);
     expect(legacy.value, isNull);
   });
+
+  test('failed plaintext cleanup cannot resurrect a cleared token', () async {
+    final secure = _MemorySecureTokenValues('secure-secret');
+    final legacy = _MemoryLegacyPreferences('legacy-secret')
+      ..deleteError = StateError('preferences');
+    final store = SecureApiTokenStore(values: secure, legacy: legacy);
+
+    await expectLater(store.write(''), throwsStateError);
+    expect(secure.value, 'secure-secret');
+    expect(legacy.value, 'legacy-secret');
+
+    legacy.deleteError = null;
+    await store.write('');
+    expect(secure.value, isNull);
+    expect(legacy.value, isNull);
+  });
 }
 
 final class _MemorySecureTokenValues implements SecureTokenValues {

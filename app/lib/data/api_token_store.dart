@@ -98,10 +98,13 @@ final class SecureApiTokenStore implements ApiTokenStore {
   @override
   Future<void> write(String token) async {
     if (token.isEmpty) {
+      // Remove the plaintext fallback first. Otherwise a failed legacy cleanup
+      // could resurrect that credential on the next migration read.
+      if (await legacy.read() != null) await legacy.delete();
       await values.delete(secureStorageKey);
-    } else {
-      await values.write(secureStorageKey, token);
+      return;
     }
+    await values.write(secureStorageKey, token);
     if (await legacy.read() != null) await legacy.delete();
   }
 }

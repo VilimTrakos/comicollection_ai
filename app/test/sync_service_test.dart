@@ -45,25 +45,28 @@ void main() {
     expect((await _service(database).sync()).message, 'Server nije podešen');
   });
 
-  test('secure token storage failures preserve offline-first behavior', () async {
-    SharedPreferences.setMockInitialValues({
-      'server_url': 'https://sync.example.test',
-    });
-    final transport = _NeverTransport();
-    final service = SyncService(
-      database,
-      settingsRepository: SyncSettingsRepository(
-        apiTokenStore: _FailingTokenStore(),
-      ),
-      transport: transport,
-    );
+  test(
+    'secure token storage failures preserve offline-first behavior',
+    () async {
+      SharedPreferences.setMockInitialValues({
+        'server_url': 'https://sync.example.test',
+      });
+      final transport = _NeverTransport();
+      final service = SyncService(
+        database,
+        settingsRepository: SyncSettingsRepository(
+          apiTokenStore: _FailingTokenStore(),
+        ),
+        transport: transport,
+      );
 
-    final result = await service.sync();
+      final result = await service.sync();
 
-    expect(result.ok, isFalse);
-    expect(result.message, 'Offline · spremljeno lokalno');
-    expect(transport.calls, 0);
-  });
+      expect(result.ok, isFalse);
+      expect(result.message, 'Offline · spremljeno lokalno');
+      expect(transport.calls, 0);
+    },
+  );
 
   test(
     'uploads local changes, merges remote changes and stores cursor',
