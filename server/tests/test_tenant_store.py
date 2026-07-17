@@ -112,6 +112,88 @@ class TenantStoreTest(unittest.TestCase):
         self.assertNotIn("private-account-identifier", path.name)
         self.assertRegex(path.name, r"^account-[0-9a-f]{64}\.sqlite3$")
 
+    def test_privacy_export_contains_only_canonical_account_state(self) -> None:
+        self.assertEqual(
+            self.store.export_snapshot("account-empty"),
+            {"server_id": None, "revision": 0, "entities": []},
+        )
+        self.assertFalse(self.store.database_path("account-empty").exists())
+
+        synced = self.store.sync(
+            "account-a",
+            v2_mutation_request("Portable private title"),
+        )
+        exported = self.store.export_snapshot("account-a")
+
+        self.assertEqual(exported["server_id"], synced["server_id"])
+        self.assertEqual(exported["revision"], 1)
+        self.assertEqual(len(exported["entities"]), 1)
+        self.assertEqual(
+            exported["entities"][0]["data"]["title"],
+            "Portable private title",
+        )
+        self.assertNotIn("mutation_id", exported["entities"][0])
+        self.assertNotIn("request_id", exported["entities"][0])
+
+    def test_erasing_account_removes_storage_and_permanently_blocks_work(self) -> None:
+        self.store.sync("account-a", v2_mutation_request("Erase me"))
+        database = self.store.database_path("account-a")
+        Path(f"{database}-wal").touch()
+        Path(f"{database}-shm").touch()
+
+        self.store.erase_account("account-a")
+
+        self.assertFalse(database.exists())
+        self.assertFalse(Path(f"{database}-wal").exists())
+        self.assertFalse(Path(f"{database}-shm").exists())
+        for operation in (
+            lambda: self.store.export_snapshot("account-a"),
+            lambda: self.store.sync(
+                "account-a",
+                empty_v2_request("blocked-after-erasure"),
+            ),
+        ):
+            with self.assertRaises(TenantStorageError) as blocked:
+                operation()
+            self.assertEqual(blocked.exception.code, "account_deleting")
+
+    def test_erasure_waits_for_in_flight_sync_and_blocks_new_work(self) -> None:
+        entered = Event()
+        release = Event()
+
+        class BlockingStore:
+            def sync_v2(self, payload, *, cache_response=True):
+                entered.set()
+                release.wait(timeout=5)
+                return {"ok": True}
+
+        with patch.object(self.store, "_store", return_value=BlockingStore()):
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                active = executor.submit(
+                    self.store.sync,
+                    "account-a",
+                    v2_mutation_request("In flight"),
+                )
+                self.assertTrue(entered.wait(timeout=5))
+                erasure = executor.submit(self.store.erase_account, "account-a")
+                with self.store._operations_changed:
+                    self.assertTrue(
+                        self.store._operations_changed.wait_for(
+                            lambda: "account-a" in self.store._blocked_accounts,
+                            timeout=5,
+                        )
+                    )
+                self.assertFalse(erasure.done())
+                with self.assertRaises(TenantStorageError) as blocked:
+                    self.store.sync(
+                        "account-a",
+                        empty_v2_request("blocked-during-erasure"),
+                    )
+                self.assertEqual(blocked.exception.code, "account_deleting")
+                release.set()
+                self.assertEqual(active.result(timeout=5), {"ok": True})
+                erasure.result(timeout=5)
+
     def test_write_limits_preserve_existing_tenant_pulls(self) -> None:
         stored = self.store.sync("account-a", v2_mutation_request("Stored"))
         quota_limited = TenantStore(

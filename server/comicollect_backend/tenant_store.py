@@ -8,9 +8,9 @@ import os
 import shutil
 import tempfile
 from collections import OrderedDict
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
-from threading import Lock
+from threading import Condition, Lock
 from typing import Iterator
 
 from .api_errors import PublicApiError
@@ -49,6 +49,9 @@ class TenantStore:
         self.minimum_free_bytes = minimum_free_bytes
         self._stores: OrderedDict[str, object] = OrderedDict()
         self._lock = Lock()
+        self._operations_changed = Condition(self._lock)
+        self._active_operations: dict[str, int] = {}
+        self._blocked_accounts: set[str] = set()
         self._capacity_lock = Lock()
         self._tenant_reservations: dict[str, int] = {}
         self._global_reservation = 0
@@ -61,27 +64,90 @@ class TenantStore:
 
     def sync(self, account_id: str, payload: dict) -> dict:
         validated = _validated_v2_payload(payload)
-        pull_only = not validated["mutations"]
-        database_exists = self.database_path(account_id).is_file()
-        if pull_only and database_exists:
-            return self._store(account_id).sync_v2(
-                validated,
-                cache_response=False,
-            )
-        reservation = _write_reservation_bytes(validated)
-        with self._reserve_capacity(account_id, reservation):
-            return self._store(account_id).sync_v2(
-                validated,
-                cache_response=not pull_only,
-            )
+        with self._account_operation(account_id):
+            pull_only = not validated["mutations"]
+            database_exists = self.database_path(account_id).is_file()
+            if pull_only and database_exists:
+                return self._store(account_id).sync_v2(
+                    validated,
+                    cache_response=False,
+                )
+            reservation = _write_reservation_bytes(validated)
+            with self._reserve_capacity(account_id, reservation):
+                return self._store(account_id).sync_v2(
+                    validated,
+                    cache_response=not pull_only,
+                )
 
     def sync_v1(self, account_id: str, since: int, changes: list[dict]):
-        reservation = _write_reservation_bytes(changes)
-        with self._reserve_capacity(account_id, reservation):
-            return self._store(account_id).sync(since, changes)
+        with self._account_operation(account_id):
+            reservation = _write_reservation_bytes(changes)
+            with self._reserve_capacity(account_id, reservation):
+                return self._store(account_id).sync(since, changes)
 
     def server_id(self, account_id: str) -> str:
-        return self._store(account_id).server_id
+        with self._account_operation(account_id):
+            return self._store(account_id).server_id
+
+    def export_snapshot(self, account_id: str) -> dict:
+        """Return the canonical, user-owned Sync v2 state only."""
+
+        with self._account_operation(account_id):
+            database = self.database_path(account_id)
+            if not database.is_file():
+                return {"server_id": None, "revision": 0, "entities": []}
+            store = self._store(account_id)
+            with store.lock, closing(store.connect()) as connection:
+                server = connection.execute(
+                    "SELECT value FROM sync_meta WHERE key='server_id'"
+                ).fetchone()
+                revision = connection.execute(
+                    "SELECT COALESCE(MAX(revision),0) FROM v2_change_groups"
+                ).fetchone()[0]
+                rows = connection.execute(
+                    "SELECT entity_type,entity_id,operation,data_json,revision "
+                    "FROM v2_entities ORDER BY entity_type,entity_id"
+                ).fetchall()
+            return {
+                "server_id": None if server is None else str(server[0]),
+                "revision": int(revision),
+                "entities": [
+                    {
+                        "entity_type": str(row["entity_type"]),
+                        "entity_id": str(row["entity_id"]),
+                        "operation": str(row["operation"]),
+                        "data": json.loads(row["data_json"]),
+                        "revision": int(row["revision"]),
+                    }
+                    for row in rows
+                ],
+            }
+
+    def erase_account(self, account_id: str) -> None:
+        """Block future work and remove one tenant database and its sidecars."""
+
+        with self._operations_changed:
+            self._blocked_accounts.add(account_id)
+            self._operations_changed.notify_all()
+            while self._active_operations.get(account_id, 0):
+                self._operations_changed.wait()
+            self._stores.pop(account_id, None)
+        try:
+            database = self.database_path(account_id)
+            for candidate in (
+                database,
+                Path(f"{database}-wal"),
+                Path(f"{database}-shm"),
+            ):
+                try:
+                    candidate.unlink()
+                except FileNotFoundError:
+                    continue
+        except BaseException:
+            with self._operations_changed:
+                self._blocked_accounts.discard(account_id)
+                self._operations_changed.notify_all()
+            raise
 
     def ready(self) -> bool:
         descriptor: int | None = None
@@ -120,6 +186,12 @@ class TenantStore:
 
     def _store(self, account_id: str):
         with self._lock:
+            if account_id in self._blocked_accounts:
+                raise TenantStorageError(
+                    410,
+                    "account_deleting",
+                    "Account deletion is in progress",
+                )
             store = self._stores.pop(account_id, None)
             if store is None:
                 # Lazy import avoids a cycle with the compatibility launcher.
@@ -134,6 +206,29 @@ class TenantStore:
             while len(self._stores) > self.maximum_cached_stores:
                 self._stores.popitem(last=False)
             return store
+
+    @contextmanager
+    def _account_operation(self, account_id: str) -> Iterator[None]:
+        with self._operations_changed:
+            if account_id in self._blocked_accounts:
+                raise TenantStorageError(
+                    410,
+                    "account_deleting",
+                    "Account deletion is in progress",
+                )
+            self._active_operations[account_id] = (
+                self._active_operations.get(account_id, 0) + 1
+            )
+        try:
+            yield
+        finally:
+            with self._operations_changed:
+                remaining = self._active_operations[account_id] - 1
+                if remaining:
+                    self._active_operations[account_id] = remaining
+                else:
+                    del self._active_operations[account_id]
+                self._operations_changed.notify_all()
 
     @contextmanager
     def _reserve_capacity(
