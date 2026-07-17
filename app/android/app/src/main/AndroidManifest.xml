@@ -6,7 +6,9 @@
     <application
         android:label="Comicollect"
         android:name="${applicationName}"
-        android:usesCleartextTraffic="true"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        android:usesCleartextTraffic="false"
         android:icon="@mipmap/ic_launcher">
         <!-- Impeller OpenGLES can render a permanent black surface on some
              Android emulators. Skia is more reliable for this camera-heavy app. -->
