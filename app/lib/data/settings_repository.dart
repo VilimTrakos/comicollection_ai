@@ -38,7 +38,9 @@ class AppSettings {
 }
 
 class SettingsRepository {
-  const SettingsRepository();
+  const SettingsRepository({this.namespace = ''});
+
+  final String namespace;
 
   static const _catalogVersionKey = 'catalog_version';
   static const _v2LastSuccessfulSyncKey = 'last_successful_sync_v2';
@@ -46,14 +48,16 @@ class SettingsRepository {
   Future<AppSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
     return AppSettings(
-      darkMode: prefs.getBool('dark_mode') ?? true,
-      accent: prefs.getString('accent') ?? 'red',
-      comicTitles: prefs.getBool('comic_titles') ?? false,
-      showStatistics: prefs.getBool('show_statistics') ?? true,
-      autoSync: prefs.getBool('auto_sync') ?? true,
-      newIssueNotifications: prefs.getBool('new_issue_notifications') ?? true,
+      darkMode: prefs.getBool(_key('dark_mode')) ?? true,
+      accent: prefs.getString(_key('accent')) ?? 'red',
+      comicTitles: prefs.getBool(_key('comic_titles')) ?? false,
+      showStatistics: prefs.getBool(_key('show_statistics')) ?? true,
+      autoSync: prefs.getBool(_key('auto_sync')) ?? true,
+      newIssueNotifications:
+          prefs.getBool(_key('new_issue_notifications')) ?? true,
       lastSyncAt: _dateFromMilliseconds(
-        prefs.getInt(_v2LastSuccessfulSyncKey) ?? prefs.getInt('last_sync'),
+        prefs.getInt(_key(_v2LastSuccessfulSyncKey)) ??
+            prefs.getInt(_key('last_sync')),
       ),
     );
   }
@@ -68,17 +72,20 @@ class SettingsRepository {
     bool? newIssueNotifications,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    if (darkMode != null) await prefs.setBool('dark_mode', darkMode);
-    if (accent != null) await prefs.setString('accent', accent);
+    if (darkMode != null) await prefs.setBool(_key('dark_mode'), darkMode);
+    if (accent != null) await prefs.setString(_key('accent'), accent);
     if (comicTitles != null) {
-      await prefs.setBool('comic_titles', comicTitles);
+      await prefs.setBool(_key('comic_titles'), comicTitles);
     }
     if (showStatistics != null) {
-      await prefs.setBool('show_statistics', showStatistics);
+      await prefs.setBool(_key('show_statistics'), showStatistics);
     }
-    if (autoSync != null) await prefs.setBool('auto_sync', autoSync);
+    if (autoSync != null) await prefs.setBool(_key('auto_sync'), autoSync);
     if (newIssueNotifications != null) {
-      await prefs.setBool('new_issue_notifications', newIssueNotifications);
+      await prefs.setBool(
+        _key('new_issue_notifications'),
+        newIssueNotifications,
+      );
     }
     return current.copyWith(
       darkMode: darkMode,
@@ -93,13 +100,14 @@ class SettingsRepository {
   Future<DateTime?> loadLastSyncAt() async {
     final prefs = await SharedPreferences.getInstance();
     return _dateFromMilliseconds(
-      prefs.getInt(_v2LastSuccessfulSyncKey) ?? prefs.getInt('last_sync'),
+      prefs.getInt(_key(_v2LastSuccessfulSyncKey)) ??
+          prefs.getInt(_key('last_sync')),
     );
   }
 
   Future<int> loadCatalogVersion() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getInt(_catalogVersionKey) ?? 0;
+    return prefs.getInt(_key(_catalogVersionKey)) ?? 0;
   }
 
   Future<void> saveCatalogVersion(int version) async {
@@ -107,7 +115,7 @@ class SettingsRepository {
       throw ArgumentError.value(version, 'version', 'must be positive');
     }
     final prefs = await SharedPreferences.getInstance();
-    final saved = await prefs.setInt(_catalogVersionKey, version);
+    final saved = await prefs.setInt(_key(_catalogVersionKey), version);
     if (!saved) {
       throw StateError('Catalog version could not be persisted.');
     }
@@ -117,15 +125,17 @@ class SettingsRepository {
   /// reads. Catalog refreshes use the stable catalog_version key above.
   Future<bool> isStarterCatalogSeeded() async {
     final prefs = await SharedPreferences.getInstance();
-    return prefs.getBool('starter_catalog_v3') ?? false;
+    return prefs.getBool(_key('starter_catalog_v3')) ?? false;
   }
 
   Future<void> markStarterCatalogSeeded() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool('starter_catalog_v1', true);
-    await prefs.setBool('starter_catalog_v2', true);
-    await prefs.setBool('starter_catalog_v3', true);
+    await prefs.setBool(_key('starter_catalog_v1'), true);
+    await prefs.setBool(_key('starter_catalog_v2'), true);
+    await prefs.setBool(_key('starter_catalog_v3'), true);
   }
+
+  String _key(String value) => namespace.isEmpty ? value : '$namespace.$value';
 
   static DateTime? _dateFromMilliseconds(int? value) =>
       value == null ? null : DateTime.fromMillisecondsSinceEpoch(value);

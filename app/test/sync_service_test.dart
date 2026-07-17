@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
 import 'package:comicollect/data/local_database.dart';
 import 'package:comicollect/data/sync_service.dart';
+import 'package:comicollect/data/sync_settings_repository.dart';
 import 'package:comicollect/data/sync_transport.dart';
 import 'package:comicollect/models/comic.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -20,6 +23,7 @@ void main() {
   late LocalDatabase database;
 
   setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
     SharedPreferences.setMockInitialValues({});
     database = LocalDatabase(pathOverride: inMemoryDatabasePath);
   });
@@ -39,6 +43,26 @@ void main() {
 
     SharedPreferences.setMockInitialValues({'api_token': 'secret'});
     expect((await _service(database).sync()).message, 'Server nije podešen');
+  });
+
+  test('secure token storage failures preserve offline-first behavior', () async {
+    SharedPreferences.setMockInitialValues({
+      'server_url': 'https://sync.example.test',
+    });
+    final transport = _NeverTransport();
+    final service = SyncService(
+      database,
+      settingsRepository: SyncSettingsRepository(
+        apiTokenStore: _FailingTokenStore(),
+      ),
+      transport: transport,
+    );
+
+    final result = await service.sync();
+
+    expect(result.ok, isFalse);
+    expect(result.message, 'Offline · spremljeno lokalno');
+    expect(transport.calls, 0);
   });
 
   test(
@@ -154,9 +178,39 @@ void main() {
     expect(result.ok, isFalse);
     expect(result.message, 'Offline · spremljeno lokalno');
   });
+
+  test('bounds a stalled legacy response body', () async {
+    final releaseResponse = Completer<void>();
+    final server = await _server((request) async {
+      await request.drain<void>();
+      request.response
+        ..headers.contentType = ContentType.json
+        ..write('{"server_time":');
+      await request.response.flush();
+      await releaseResponse.future;
+      await request.response.close();
+    });
+    addTearDown(() async {
+      if (!releaseResponse.isCompleted) releaseResponse.complete();
+      await server.close(force: true);
+    });
+    await _configure(server);
+
+    final result = await _service(
+      database,
+      responseTimeout: const Duration(milliseconds: 50),
+    ).sync();
+
+    expect(result.ok, isFalse);
+    expect(result.message, 'Offline · spremljeno lokalno');
+    releaseResponse.complete();
+  });
 }
 
-SyncService _service(LocalDatabase database) => SyncService(
+SyncService _service(
+  LocalDatabase database, {
+  Duration responseTimeout = const Duration(seconds: 10),
+}) => SyncService(
   database,
   // An explicitly supplied legacy transport intentionally tests the retained
   // v1 compatibility path. Production construction prefers v2.
@@ -165,10 +219,34 @@ SyncService _service(LocalDatabase database) => SyncService(
       HttpClient.new,
       _RealHttpOverrides(),
     ),
+    responseTimeout: responseTimeout,
   ),
 );
 
 class _RealHttpOverrides extends HttpOverrides {}
+
+final class _FailingTokenStore implements ApiTokenStore {
+  @override
+  Future<String> read() => throw Exception('secure storage unavailable');
+
+  @override
+  Future<void> write(String token) async {}
+}
+
+final class _NeverTransport implements SyncTransport {
+  int calls = 0;
+
+  @override
+  Future<SyncExchange> exchange({
+    required String serverUrl,
+    required String apiToken,
+    required int since,
+    required Iterable<Comic> changes,
+  }) async {
+    calls++;
+    throw StateError('transport must not be called');
+  }
+}
 
 Future<HttpServer> _server(
   Future<void> Function(HttpRequest request) handler,

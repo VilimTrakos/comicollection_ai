@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 
 import '../models/sync_v2.dart';
 import '../models/sync_v2_response_validator.dart';
+import '../services/auth/access_token_provider.dart';
 import 'sync_transport.dart';
 
 abstract interface class SyncV2Transport {
@@ -24,6 +25,7 @@ class HttpSyncV2Transport implements SyncV2Transport {
     this.connectionTimeout = const Duration(seconds: 5),
     this.responseTimeout = const Duration(seconds: 10),
     this.maxResponseBytes = SyncV2ResponseValidator.maximumResponseBytes,
+    this.accessTokenProvider,
   }) : _clientFactory = clientFactory ?? HttpClient.new,
        _requestIdFactory = requestIdFactory ?? const Uuid().v4;
 
@@ -32,6 +34,7 @@ class HttpSyncV2Transport implements SyncV2Transport {
   final Duration connectionTimeout;
   final Duration responseTimeout;
   final int maxResponseBytes;
+  final AccessTokenProvider? accessTokenProvider;
 
   @override
   Future<SyncV2Exchange> exchange({
@@ -45,30 +48,75 @@ class HttpSyncV2Transport implements SyncV2Transport {
     if (requestId.isEmpty) {
       throw StateError('Sync request id must not be empty.');
     }
+    final requestBody = utf8.encode(
+      jsonEncode(batch.toRequestJson(requestId: requestId, limit: limit)),
+    );
+    var bearerToken = accessTokenProvider == null
+        ? apiToken
+        : await accessTokenProvider!.accessToken();
     final client = _clientFactory()..connectionTimeout = connectionTimeout;
     try {
-      final request = await client.postUrl(Uri.parse('$serverUrl/api/v2/sync'));
-      request.headers
-        ..contentType = ContentType.json
-        ..set(HttpHeaders.acceptHeader, ContentType.json.mimeType)
-        ..set(HttpHeaders.authorizationHeader, 'Bearer $apiToken');
-      final requestBody = utf8.encode(
-        jsonEncode(batch.toRequestJson(requestId: requestId, limit: limit)),
+      var response = await _send(
+        client,
+        serverUrl: serverUrl,
+        bearerToken: bearerToken,
+        requestBody: requestBody,
       );
-      request.contentLength = requestBody.length;
-      request.add(requestBody);
-      final response = await request.close().timeout(responseTimeout);
-      final body = await _readBody(response).timeout(responseTimeout);
-      if (response.statusCode != HttpStatus.ok) {
-        throw SyncServerException.fromResponse(response.statusCode, body);
+      var failure = response.statusCode == HttpStatus.ok
+          ? null
+          : SyncServerException.fromResponse(
+              response.statusCode,
+              response.body,
+            );
+      if (failure?.statusCode == HttpStatus.unauthorized &&
+          (failure?.code == 'access_expired' ||
+              failure?.code == 'invalid_token') &&
+          accessTokenProvider != null) {
+        bearerToken = await accessTokenProvider!.accessToken(
+          forceRefresh: true,
+        );
+        response = await _send(
+          client,
+          serverUrl: serverUrl,
+          bearerToken: bearerToken,
+          requestBody: requestBody,
+        );
+        failure = response.statusCode == HttpStatus.ok
+            ? null
+            : SyncServerException.fromResponse(
+                response.statusCode,
+                response.body,
+              );
       }
+      if (failure != null) throw failure;
 
-      final exchange = _decode(body);
+      final exchange = _decode(response.body);
       _validateExchange(exchange, requestId: requestId, batch: batch);
       return exchange;
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<({int statusCode, String body})> _send(
+    HttpClient client, {
+    required String serverUrl,
+    required String bearerToken,
+    required List<int> requestBody,
+  }) async {
+    final request = await client.postUrl(Uri.parse('$serverUrl/api/v2/sync'));
+    request.followRedirects = false;
+    request.headers
+      ..contentType = ContentType.json
+      ..set(HttpHeaders.acceptHeader, ContentType.json.mimeType)
+      ..set(HttpHeaders.authorizationHeader, 'Bearer $bearerToken');
+    request.contentLength = requestBody.length;
+    request.add(requestBody);
+    final response = await request.close().timeout(responseTimeout);
+    return (
+      statusCode: response.statusCode,
+      body: await _readBody(response).timeout(responseTimeout),
+    );
   }
 
   Future<String> _readBody(HttpClientResponse response) async {

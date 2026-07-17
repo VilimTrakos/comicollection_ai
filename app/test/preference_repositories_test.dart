@@ -1,13 +1,17 @@
 import 'package:comicollect/data/release_watch_repository.dart';
 import 'package:comicollect/data/search_history_repository.dart';
 import 'package:comicollect/data/sync_settings_repository.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+  });
 
   group('SearchHistoryRepository', () {
     test('loads an empty history by default', () async {
@@ -125,17 +129,21 @@ void main() {
       expect(settings.lastSuccessfulSyncAt, isNull);
     });
 
-    test('default token store preserves legacy preferences', () async {
+    test('default token store migrates legacy preferences securely', () async {
+      SharedPreferences.setMockInitialValues({'api_token': 'legacy-token'});
       const repository = SyncSettingsRepository();
 
-      await repository.saveConnection(
-        serverUrl: 'http://localhost',
-        apiToken: 'legacy-token',
-      );
+      final settings = await repository.load();
 
       final preferences = await SharedPreferences.getInstance();
-      expect(preferences.getString('api_token'), 'legacy-token');
-      expect((await repository.load()).apiToken, 'legacy-token');
+      expect(preferences.containsKey('api_token'), isFalse);
+      expect(settings.apiToken, 'legacy-token');
+      expect(
+        await const FlutterSecureStorage().read(
+          key: SecureApiTokenStore.secureStorageKey,
+        ),
+        'legacy-token',
+      );
     });
   });
 }

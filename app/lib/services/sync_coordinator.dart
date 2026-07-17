@@ -31,26 +31,38 @@ class SyncCoordinator {
   Timer? _timer;
   Timer? _continuationTimer;
   bool _running = false;
+  bool _acceptingWork = true;
+  Future<SyncExecution?>? _activeSynchronization;
 
   bool get running => _running;
 
   Future<SyncExecution?> synchronize({
     required bool enabled,
     bool force = false,
-  }) async {
-    if ((!enabled && !force) || _running) return null;
-    _running = true;
-    try {
-      final result = await syncService.sync();
-      if (!result.ok) return SyncExecution(result: result);
-      return SyncExecution(
-        result: result,
-        comics: await collections.load(),
-        lastSyncAt: await settings.loadLastSyncAt(),
-      );
-    } finally {
-      _running = false;
+  }) {
+    if ((!enabled && !force) || !_acceptingWork || _running) {
+      return Future.value(null);
     }
+    _running = true;
+    late final Future<SyncExecution?> operation;
+    operation = _executeSynchronization().whenComplete(() {
+      _running = false;
+      if (identical(_activeSynchronization, operation)) {
+        _activeSynchronization = null;
+      }
+    });
+    _activeSynchronization = operation;
+    return operation;
+  }
+
+  Future<SyncExecution?> _executeSynchronization() async {
+    final result = await syncService.sync();
+    if (!result.ok) return SyncExecution(result: result);
+    return SyncExecution(
+      result: result,
+      comics: await collections.load(),
+      lastSyncAt: await settings.loadLastSyncAt(),
+    );
   }
 
   void schedule({
@@ -58,7 +70,7 @@ class SyncCoordinator {
     required Future<void> Function() action,
   }) {
     _timer?.cancel();
-    _timer = enabled
+    _timer = enabled && _acceptingWork
         ? Timer.periodic(interval, (_) => unawaited(action()))
         : null;
     if (!enabled) {
@@ -72,12 +84,25 @@ class SyncCoordinator {
     required Future<void> Function() action,
   }) {
     _continuationTimer?.cancel();
-    _continuationTimer = enabled
+    _continuationTimer = enabled && _acceptingWork
         ? Timer(continuationDelay, () => unawaited(action()))
         : null;
   }
 
+  /// Stops new work and waits until the current synchronization has released
+  /// every database and authentication dependency owned by this runtime.
+  Future<void> quiesce() async {
+    _acceptingWork = false;
+    _cancelTimers();
+    await _activeSynchronization;
+  }
+
   void dispose() {
+    _acceptingWork = false;
+    _cancelTimers();
+  }
+
+  void _cancelTimers() {
     _timer?.cancel();
     _timer = null;
     _continuationTimer?.cancel();

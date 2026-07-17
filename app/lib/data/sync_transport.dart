@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import '../models/comic.dart';
+import '../models/sync_v2_response_validator.dart';
+import '../services/auth/access_token_provider.dart';
 
 class SyncExchange {
   const SyncExchange({required this.serverTime, required this.changes});
@@ -57,10 +59,17 @@ abstract interface class SyncTransport {
 
 /// HTTP implementation kept separate from local persistence and merge logic.
 class HttpSyncTransport implements SyncTransport {
-  HttpSyncTransport({HttpClient Function()? clientFactory})
-    : _clientFactory = clientFactory ?? HttpClient.new;
+  HttpSyncTransport({
+    HttpClient Function()? clientFactory,
+    this.accessTokenProvider,
+    this.maxResponseBytes = SyncV2ResponseValidator.maximumResponseBytes,
+    this.responseTimeout = const Duration(seconds: 10),
+  }) : _clientFactory = clientFactory ?? HttpClient.new;
 
   final HttpClient Function() _clientFactory;
+  final AccessTokenProvider? accessTokenProvider;
+  final int maxResponseBytes;
+  final Duration responseTimeout;
 
   @override
   Future<SyncExchange> exchange({
@@ -69,31 +78,88 @@ class HttpSyncTransport implements SyncTransport {
     required int since,
     required Iterable<Comic> changes,
   }) async {
+    final requestBody = utf8.encode(
+      jsonEncode({
+        'since': since,
+        'changes': changes.map((comic) => comic.toJson()).toList(),
+      }),
+    );
+    var bearerToken = accessTokenProvider == null
+        ? apiToken
+        : await accessTokenProvider!.accessToken();
     final client = _clientFactory()
       ..connectionTimeout = const Duration(seconds: 5);
     try {
-      final request = await client.postUrl(Uri.parse('$serverUrl/api/v1/sync'));
-      request.headers.contentType = ContentType.json;
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $apiToken');
-      final requestBody = utf8.encode(
-        jsonEncode({
-          'since': since,
-          'changes': changes.map((comic) => comic.toJson()).toList(),
-        }),
+      var response = await _send(
+        client,
+        serverUrl: serverUrl,
+        bearerToken: bearerToken,
+        requestBody: requestBody,
       );
-      request.contentLength = requestBody.length;
-      request.add(requestBody);
-      final response = await request.close().timeout(
-        const Duration(seconds: 10),
-      );
-      final body = await utf8.decoder.bind(response).join();
-      if (response.statusCode != HttpStatus.ok) {
-        throw SyncServerException.fromResponse(response.statusCode, body);
+      var failure = response.statusCode == HttpStatus.ok
+          ? null
+          : SyncServerException.fromResponse(
+              response.statusCode,
+              response.body,
+            );
+      if (failure?.statusCode == HttpStatus.unauthorized &&
+          (failure?.code == 'access_expired' ||
+              failure?.code == 'invalid_token') &&
+          accessTokenProvider != null) {
+        bearerToken = await accessTokenProvider!.accessToken(
+          forceRefresh: true,
+        );
+        response = await _send(
+          client,
+          serverUrl: serverUrl,
+          bearerToken: bearerToken,
+          requestBody: requestBody,
+        );
+        failure = response.statusCode == HttpStatus.ok
+            ? null
+            : SyncServerException.fromResponse(
+                response.statusCode,
+                response.body,
+              );
       }
-      return _decode(body);
+      if (failure != null) throw failure;
+      return _decode(response.body);
     } finally {
       client.close(force: true);
     }
+  }
+
+  Future<({int statusCode, String body})> _send(
+    HttpClient client, {
+    required String serverUrl,
+    required String bearerToken,
+    required List<int> requestBody,
+  }) async {
+    final request = await client.postUrl(Uri.parse('$serverUrl/api/v1/sync'));
+    request.followRedirects = false;
+    request.headers.contentType = ContentType.json;
+    request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $bearerToken');
+    request.contentLength = requestBody.length;
+    request.add(requestBody);
+    final response = await request.close().timeout(responseTimeout);
+    return (
+      statusCode: response.statusCode,
+      body: await _readBody(response).timeout(responseTimeout),
+    );
+  }
+
+  Future<String> _readBody(HttpClientResponse response) async {
+    if (response.contentLength > maxResponseBytes) {
+      throw const FormatException('Sync response is too large');
+    }
+    final bytes = <int>[];
+    await for (final chunk in response) {
+      if (bytes.length + chunk.length > maxResponseBytes) {
+        throw const FormatException('Sync response is too large');
+      }
+      bytes.addAll(chunk);
+    }
+    return utf8.decode(bytes);
   }
 
   SyncExchange _decode(String body) {

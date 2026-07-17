@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import '../models/auth_failure.dart';
+import '../services/auth/access_token_provider.dart';
 import 'local_database.dart';
 import 'sync_settings_repository.dart';
 import 'sync_transport.dart';
@@ -20,14 +22,24 @@ class SyncService {
     SyncV2Transport? v2Transport,
     HttpClient Function()? clientFactory,
     int Function()? nowMilliseconds,
+    this.productionServerUrl,
+    this.accessTokenProvider,
     this.maxV2Iterations = 20,
   }) : settingsRepository =
            settingsRepository ?? const SyncSettingsRepository(),
-       transport = transport ?? HttpSyncTransport(clientFactory: clientFactory),
+       transport =
+           transport ??
+           HttpSyncTransport(
+             clientFactory: clientFactory,
+             accessTokenProvider: accessTokenProvider,
+           ),
        v2Transport =
            v2Transport ??
            (transport == null
-               ? HttpSyncV2Transport(clientFactory: clientFactory)
+               ? HttpSyncV2Transport(
+                   clientFactory: clientFactory,
+                   accessTokenProvider: accessTokenProvider,
+                 )
                : null),
        _nowMilliseconds =
            nowMilliseconds ?? (() => DateTime.now().millisecondsSinceEpoch) {
@@ -50,6 +62,8 @@ class SyncService {
   final SyncV2Transport? v2Transport;
   final int maxV2Iterations;
   final int Function() _nowMilliseconds;
+  final String? productionServerUrl;
+  final AccessTokenProvider? accessTokenProvider;
 
   /// Explicit recovery path for moving this installation to another server.
   /// Collection data and the stable device id stay intact; the next v2 sync
@@ -60,30 +74,40 @@ class SyncService {
   }
 
   Future<SyncResult> sync() async {
-    final settings = await settingsRepository.load();
-    if (!settings.isConfigured) {
-      return const SyncResult(false, 'Server nije podešen');
-    }
     try {
+      final settings = await settingsRepository.load(
+        includeApiToken: accessTokenProvider == null,
+      );
+      final serverUrl = (productionServerUrl ?? settings.serverUrl)
+          .trim()
+          .replaceFirst(RegExp(r'/+$'), '');
+      if (serverUrl.isEmpty ||
+          (accessTokenProvider == null && settings.apiToken.trim().isEmpty)) {
+        return const SyncResult(false, 'Server nije podešen');
+      }
+      final apiToken = accessTokenProvider == null
+          ? settings.apiToken.trim()
+          : await accessTokenProvider!.accessToken();
+      final connection = (serverUrl: serverUrl, apiToken: apiToken);
       final currentV2Transport = v2Transport;
       // Recover an interrupted compatibility exchange before probing v2.
       // Otherwise speculative legacy staging could protect stale state while
       // a newer v2 baseline is being downloaded.
       if (await db.hasPendingV1Fallback()) {
         try {
-          return await _syncV1(settings, fallbackFromV2: true);
+          return await _syncV1(settings, connection, fallbackFromV2: true);
         } on SyncServerException catch (error) {
           if (error.code != 'v1_read_only' || currentV2Transport == null) {
             rethrow;
           }
           await db.promotePendingV1FallbackToV2();
-          return await _syncV2(settings, currentV2Transport);
+          return await _syncV2(settings, connection, currentV2Transport);
         }
       }
       var fellBackFromV2 = false;
       if (currentV2Transport != null) {
         try {
-          return await _syncV2(settings, currentV2Transport);
+          return await _syncV2(settings, connection, currentV2Transport);
         } on _SyncV2Unavailable {
           // A server without the v2 route may still serve the compatibility
           // endpoint. _syncV2 permits this only before a server is pinned.
@@ -91,7 +115,11 @@ class SyncService {
         }
       }
       try {
-        return await _syncV1(settings, fallbackFromV2: fellBackFromV2);
+        return await _syncV1(
+          settings,
+          connection,
+          fallbackFromV2: fellBackFromV2,
+        );
       } on SyncServerException catch (error) {
         if (!fellBackFromV2 ||
             error.code != 'v1_read_only' ||
@@ -99,10 +127,19 @@ class SyncService {
           rethrow;
         }
         await db.promotePendingV1FallbackToV2();
-        return await _syncV2(settings, currentV2Transport);
+        return await _syncV2(settings, connection, currentV2Transport);
       }
     } on SyncServerException catch (error) {
       return _serverFailure(error);
+    } on AuthException catch (error) {
+      if (error.invalidatesSession ||
+          error.kind == AuthFailureKind.credentials) {
+        return const SyncResult(
+          false,
+          'Sesija je istekla · prijavite se ponovno',
+        );
+      }
+      return const SyncResult(false, 'Offline · spremljeno lokalno');
     } on FormatException {
       return const SyncResult(false, 'Offline · spremljeno lokalno');
     } on ArgumentError {
@@ -118,6 +155,13 @@ class SyncService {
   }
 
   SyncResult _serverFailure(SyncServerException error) {
+    if (accessTokenProvider != null &&
+        error.statusCode == HttpStatus.unauthorized) {
+      return const SyncResult(
+        false,
+        'Sesija je istekla · prijavite se ponovno',
+      );
+    }
     if (error.code == 'server_mismatch') {
       return const SyncResult(
         false,
@@ -184,7 +228,8 @@ class SyncService {
   }
 
   Future<SyncResult> _syncV1(
-    SyncSettings settings, {
+    SyncSettings settings,
+    ({String serverUrl, String apiToken}) connection, {
     bool fallbackFromV2 = false,
   }) async {
     final fallbackBatch = fallbackFromV2
@@ -193,8 +238,8 @@ class SyncService {
     final changes =
         fallbackBatch?.changes ?? await db.changedSince(settings.cursor);
     final exchange = await transport.exchange(
-      serverUrl: settings.normalizedServerUrl,
-      apiToken: settings.apiToken.trim(),
+      serverUrl: connection.serverUrl,
+      apiToken: connection.apiToken,
       since: fallbackBatch?.since ?? settings.cursor,
       changes: changes,
     );
@@ -209,6 +254,7 @@ class SyncService {
 
   Future<SyncResult> _syncV2(
     SyncSettings settings,
+    ({String serverUrl, String apiToken}) connection,
     SyncV2Transport currentTransport,
   ) async {
     var batch = await db.prepareSyncV2(legacyCursor: settings.cursor);
@@ -216,8 +262,8 @@ class SyncService {
       late final bool hasMore;
       try {
         final exchange = await currentTransport.exchange(
-          serverUrl: settings.normalizedServerUrl,
-          apiToken: settings.apiToken.trim(),
+          serverUrl: connection.serverUrl,
+          apiToken: connection.apiToken,
           batch: batch,
         );
         await db.applySyncV2(exchange);

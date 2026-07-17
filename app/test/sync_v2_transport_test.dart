@@ -3,7 +3,9 @@ import 'dart:io';
 
 import 'package:comicollect/data/sync_transport.dart';
 import 'package:comicollect/data/sync_v2_transport.dart';
+import 'package:comicollect/models/auth_failure.dart';
 import 'package:comicollect/models/sync_v2.dart';
+import 'package:comicollect/services/auth/access_token_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -50,6 +52,96 @@ void main() {
       expect(received['limit'], 100);
       expect(received['mutations'], hasLength(1));
       expect(exchange.nextCursor, 8);
+    },
+  );
+
+  test('invalid access token forces refresh and expires the session', () async {
+    final server = await _server((request) async {
+      await request.drain<void>();
+      request.response
+        ..statusCode = HttpStatus.unauthorized
+        ..headers.contentType = ContentType.json
+        ..write(
+          jsonEncode({
+            'code': 'invalid_token',
+            'error': 'invalid',
+            'request_id': 'server-error-1',
+          }),
+        );
+      await request.response.close();
+    });
+    addTearDown(() => server.close(force: true));
+    final tokens = _RejectedRefreshTokens();
+
+    await expectLater(
+      _transport(accessTokenProvider: tokens).exchange(
+        serverUrl: 'http://127.0.0.1:${server.port}',
+        apiToken: 'ignored',
+        batch: _batch(),
+      ),
+      throwsA(
+        isA<AuthException>().having(
+          (error) => error.kind,
+          'kind',
+          AuthFailureKind.sessionExpired,
+        ),
+      ),
+    );
+    expect(tokens.forcedCalls, 1);
+  });
+
+  test(
+    'refreshes once with identical body and uses new token on later pages',
+    () async {
+      final bodies = <String>[];
+      final authorizations = <String?>[];
+      var requests = 0;
+      final server = await _server((request) async {
+        requests++;
+        authorizations.add(
+          request.headers.value(HttpHeaders.authorizationHeader),
+        );
+        bodies.add(await utf8.decoder.bind(request).join());
+        if (requests == 1) {
+          request.response
+            ..statusCode = HttpStatus.unauthorized
+            ..headers.contentType = ContentType.json
+            ..write(
+              jsonEncode({
+                'code': 'access_expired',
+                'error': 'expired',
+                'request_id': 'server-error-1',
+              }),
+            );
+          await request.response.close();
+        } else {
+          await _respond(request, _response());
+        }
+      });
+      addTearDown(() => server.close(force: true));
+      final tokens = _RotatingTokens();
+      final transport = _transport(accessTokenProvider: tokens);
+
+      await transport.exchange(
+        serverUrl: 'http://127.0.0.1:${server.port}',
+        apiToken: 'ignored',
+        batch: _batch(),
+      );
+      await transport.exchange(
+        serverUrl: 'http://127.0.0.1:${server.port}',
+        apiToken: 'stale-captured-token',
+        batch: _batch(),
+      );
+
+      expect(requests, 3);
+      expect(bodies[0], bodies[1]);
+      expect(jsonDecode(bodies[0])['request_id'], 'request-1');
+      expect(authorizations, [
+        'Bearer cca_old.secret',
+        'Bearer cca_new.secret',
+        'Bearer cca_new.secret',
+      ]);
+      expect(tokens.forcedCalls, 1);
     },
   );
 
@@ -224,15 +316,41 @@ void main() {
   );
 }
 
-HttpSyncV2Transport _transport({int maxResponseBytes = 1024 * 1024}) =>
-    HttpSyncV2Transport(
-      clientFactory: () => HttpOverrides.runWithHttpOverrides(
-        HttpClient.new,
-        _RealHttpOverrides(),
-      ),
-      requestIdFactory: () => 'request-1',
-      maxResponseBytes: maxResponseBytes,
-    );
+HttpSyncV2Transport _transport({
+  int maxResponseBytes = 1024 * 1024,
+  AccessTokenProvider? accessTokenProvider,
+}) => HttpSyncV2Transport(
+  clientFactory: () =>
+      HttpOverrides.runWithHttpOverrides(HttpClient.new, _RealHttpOverrides()),
+  requestIdFactory: () => 'request-1',
+  maxResponseBytes: maxResponseBytes,
+  accessTokenProvider: accessTokenProvider,
+);
+
+class _RotatingTokens implements AccessTokenProvider {
+  String current = 'cca_old.secret';
+  int forcedCalls = 0;
+
+  @override
+  Future<String> accessToken({bool forceRefresh = false}) async {
+    if (forceRefresh) {
+      forcedCalls++;
+      current = 'cca_new.secret';
+    }
+    return current;
+  }
+}
+
+class _RejectedRefreshTokens implements AccessTokenProvider {
+  int forcedCalls = 0;
+
+  @override
+  Future<String> accessToken({bool forceRefresh = false}) async {
+    if (!forceRefresh) return 'cca_invalid.secret';
+    forcedCalls++;
+    throw const AuthException(kind: AuthFailureKind.sessionExpired);
+  }
+}
 
 class _RealHttpOverrides extends HttpOverrides {}
 

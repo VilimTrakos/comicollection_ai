@@ -150,6 +150,8 @@ class AppController extends ChangeNotifier {
   bool autoSync = true;
   bool newIssueNotifications = true;
   DateTime? lastSyncAt;
+  bool _acceptingSync = true;
+  Future<void>? _activeSync;
 
   Future<void> init() async {
     loading = true;
@@ -283,8 +285,22 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> sync({bool force = false}) async {
-    if ((!autoSync && !force) || syncing || syncCoordinator.running) return;
+  Future<void> sync({bool force = false}) {
+    if (!_acceptingSync ||
+        (!autoSync && !force) ||
+        syncing ||
+        syncCoordinator.running) {
+      return Future.value();
+    }
+    late final Future<void> operation;
+    operation = _synchronize(force: force).whenComplete(() {
+      if (identical(_activeSync, operation)) _activeSync = null;
+    });
+    _activeSync = operation;
+    return operation;
+  }
+
+  Future<void> _synchronize({required bool force}) async {
     syncing = true;
     var continueSync = false;
     notifyListeners();
@@ -393,8 +409,21 @@ class AppController extends ChangeNotifier {
     syncCoordinator.schedule(enabled: autoSync, action: sync);
   }
 
+  /// Prevents new synchronization and drains an exchange already in flight.
+  /// App runtimes call this before disposing state or closing their database.
+  Future<void> quiesce() async {
+    _acceptingSync = false;
+    final active = _activeSync;
+    try {
+      await syncCoordinator.quiesce();
+    } finally {
+      await active;
+    }
+  }
+
   @override
   void dispose() {
+    _acceptingSync = false;
     syncCoordinator.dispose();
     appearanceChanges.dispose();
     startupChanges.dispose();

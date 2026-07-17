@@ -1,5 +1,9 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'api_token_store.dart';
+
+export 'api_token_store.dart';
+
 class SyncSettings {
   const SyncSettings({
     this.serverUrl = '',
@@ -20,56 +24,29 @@ class SyncSettings {
       serverUrl.trim().replaceFirst(RegExp(r'/+$'), '');
 }
 
-/// Boundary for secret persistence.
-///
-/// The default implementation keeps backwards compatibility with existing
-/// installations. Before production release, inject an implementation backed
-/// by Android Keystore / iOS Keychain without changing the sync or UI layers.
-abstract interface class ApiTokenStore {
-  Future<String> read();
-
-  Future<void> write(String token);
-}
-
-class SharedPreferencesApiTokenStore implements ApiTokenStore {
-  const SharedPreferencesApiTokenStore();
-
-  static const _key = 'api_token';
-
-  @override
-  Future<String> read() async {
-    final preferences = await SharedPreferences.getInstance();
-    return preferences.getString(_key) ?? '';
-  }
-
-  @override
-  Future<void> write(String token) async {
-    final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_key, token);
-  }
-}
-
 /// Typed persistence boundary for server connection settings and sync cursor.
 class SyncSettingsRepository {
   const SyncSettingsRepository({
-    this.apiTokenStore = const SharedPreferencesApiTokenStore(),
+    this.apiTokenStore = const SecureApiTokenStore(),
+    this.namespace = '',
   });
 
-  static const suggestedServerUrl = 'http://192.168.1.50:8787';
+  static const suggestedServerUrl = 'https://sync.example.com';
   static const _serverUrlKey = 'server_url';
   static const _cursorKey = 'last_sync';
   static const _lastSuccessfulSyncKey = 'last_successful_sync_v2';
 
   final ApiTokenStore apiTokenStore;
+  final String namespace;
 
-  Future<SyncSettings> load() async {
+  Future<SyncSettings> load({bool includeApiToken = true}) async {
     final preferences = await SharedPreferences.getInstance();
     return SyncSettings(
-      serverUrl: preferences.getString(_serverUrlKey) ?? '',
-      apiToken: await apiTokenStore.read(),
-      cursor: preferences.getInt(_cursorKey) ?? 0,
+      serverUrl: preferences.getString(_key(_serverUrlKey)) ?? '',
+      apiToken: includeApiToken ? await apiTokenStore.read() : '',
+      cursor: preferences.getInt(_key(_cursorKey)) ?? 0,
       lastSuccessfulSyncAt: switch (preferences.getInt(
-        _lastSuccessfulSyncKey,
+        _key(_lastSuccessfulSyncKey),
       )) {
         final milliseconds? => DateTime.fromMillisecondsSinceEpoch(
           milliseconds,
@@ -84,13 +61,13 @@ class SyncSettingsRepository {
     required String apiToken,
   }) async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setString(_serverUrlKey, serverUrl.trim());
+    await preferences.setString(_key(_serverUrlKey), serverUrl.trim());
     await apiTokenStore.write(apiToken.trim());
   }
 
   Future<void> saveCursor(int cursor) async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setInt(_cursorKey, cursor);
+    await preferences.setInt(_key(_cursorKey), cursor);
   }
 
   /// Records user-facing v2 success time without changing the legacy v1
@@ -98,21 +75,23 @@ class SyncSettingsRepository {
   Future<void> saveLastSuccessfulSyncAt(DateTime timestamp) async {
     final preferences = await SharedPreferences.getInstance();
     await preferences.setInt(
-      _lastSuccessfulSyncKey,
+      _key(_lastSuccessfulSyncKey),
       timestamp.millisecondsSinceEpoch,
     );
   }
 
   Future<void> clearLastSuccessfulSyncAt() async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.remove(_lastSuccessfulSyncKey);
+    await preferences.remove(_key(_lastSuccessfulSyncKey));
   }
 
   /// Clears every server-scoped cursor when the user explicitly selects a
   /// different server. Connection values and local application data remain.
   Future<void> resetForNewServer() async {
     final preferences = await SharedPreferences.getInstance();
-    await preferences.remove(_cursorKey);
-    await preferences.remove(_lastSuccessfulSyncKey);
+    await preferences.remove(_key(_cursorKey));
+    await preferences.remove(_key(_lastSuccessfulSyncKey));
   }
+
+  String _key(String value) => namespace.isEmpty ? value : '$namespace.$value';
 }
