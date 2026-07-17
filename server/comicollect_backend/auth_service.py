@@ -72,8 +72,13 @@ class AuthService:
         self.rate_limiter.consume("register", rate_key)
         installation = _installation_id(installation_id)
         now = self.clock()
-        account = self._create_account(email, password, display_name, now)
-        pair = self._new_session(account.id, installation, now)
+        account, pair = self._register_account(
+            email,
+            password,
+            display_name,
+            installation,
+            now,
+        )
         return {"account": account.public_json(), **pair.json()}
 
     def provision_account(
@@ -230,6 +235,47 @@ class AuthService:
     def me(self, access_token: str) -> dict:
         return self.authenticate_access(access_token).account.public_json()
 
+    def _register_account(
+        self,
+        email: str,
+        password: str,
+        display_name: str,
+        installation_id: str,
+        now: int,
+    ) -> tuple[Account, TokenPair]:
+        normalized_email, normalized_name, encoded = self._account_values(
+            email,
+            password,
+            display_name,
+        )
+        access_token = self.tokens.create("cca_")
+        refresh_token = self.tokens.create("ccr_")
+        access_expires = now + self.access_ttl_ms
+        refresh_expires = now + self.refresh_ttl_ms
+        try:
+            account = self.repository.create_account_with_session(
+                email=normalized_email,
+                display_name=normalized_name,
+                password_hash=encoded,
+                installation_id=installation_id,
+                access_digest=access_token.digest,
+                access_nonce=access_token.nonce,
+                access_expires_at=access_expires,
+                refresh_digest=refresh_token.digest,
+                refresh_nonce=refresh_token.nonce,
+                refresh_expires_at=refresh_expires,
+                session_expires_at=now + self.session_ttl_ms,
+                now=now,
+            )
+        except DuplicateEmailError as exc:
+            raise _email_in_use() from exc
+        return account, TokenPair(
+            access_token.raw,
+            access_expires,
+            refresh_token.raw,
+            refresh_expires,
+        )
+
     def _new_session(
         self,
         account_id: str,
@@ -266,6 +312,27 @@ class AuthService:
         display_name: str,
         now: int,
     ) -> Account:
+        normalized_email, normalized_name, encoded = self._account_values(
+            email,
+            password,
+            display_name,
+        )
+        try:
+            return self.repository.create_account(
+                email=normalized_email,
+                display_name=normalized_name,
+                password_hash=encoded,
+                now=now,
+            )
+        except DuplicateEmailError as exc:
+            raise _email_in_use() from exc
+
+    def _account_values(
+        self,
+        email: str,
+        password: str,
+        display_name: str,
+    ) -> tuple[str, str, str]:
         normalized_email = _email(email)
         normalized_name = _display_name(display_name)
         try:
@@ -276,19 +343,7 @@ class AuthService:
                 "password_policy_failed",
                 "Password must contain between 12 and 128 characters",
             ) from exc
-        try:
-            return self.repository.create_account(
-                email=normalized_email,
-                display_name=normalized_name,
-                password_hash=encoded,
-                now=now,
-            )
-        except DuplicateEmailError as exc:
-            raise AuthError(
-                HTTPStatus.CONFLICT,
-                "email_in_use",
-                "An account already exists for this email",
-            ) from exc
+        return normalized_email, normalized_name, encoded
 
 
 def _email(raw: str) -> str:
@@ -340,3 +395,11 @@ def _request_id(raw: str) -> str:
 
 def _invalid_credentials() -> AuthError:
     return AuthError(401, "invalid_credentials", "Email or password is incorrect")
+
+
+def _email_in_use() -> AuthError:
+    return AuthError(
+        HTTPStatus.CONFLICT,
+        "email_in_use",
+        "An account already exists for this email",
+    )

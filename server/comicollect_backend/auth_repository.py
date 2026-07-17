@@ -128,22 +128,60 @@ class AuthRepository:
         account = Account(str(uuid.uuid4()), email, display_name, "active", None)
         try:
             with self._lock, closing(self.connect()) as db, db:
-                db.execute(
-                    "INSERT INTO accounts"
-                    "(id,email,display_name,password_hash,status,created_at,updated_at) "
-                    "VALUES(?,?,?,?,?,?,?)",
-                    (
-                        account.id,
-                        account.email,
-                        account.display_name,
-                        password_hash,
-                        account.status,
-                        now,
-                        now,
-                    ),
-                )
+                _insert_account(db, account, password_hash=password_hash, now=now)
         except sqlite3.IntegrityError as exc:
             raise DuplicateEmailError() from exc
+        return account
+
+    def create_account_with_session(
+        self,
+        *,
+        email: str,
+        display_name: str,
+        password_hash: str,
+        installation_id: str,
+        access_digest: bytes,
+        access_nonce: bytes,
+        access_expires_at: int,
+        refresh_digest: bytes,
+        refresh_nonce: bytes,
+        refresh_expires_at: int,
+        session_expires_at: int,
+        now: int,
+    ) -> Account:
+        """Create a public account and its first session in one transaction."""
+
+        account = Account(str(uuid.uuid4()), email, display_name, "active", None)
+        session_id = str(uuid.uuid4())
+        try:
+            with self._lock, closing(self.connect()) as db, db:
+                db.execute("BEGIN IMMEDIATE")
+                _insert_account(db, account, password_hash=password_hash, now=now)
+                prune_stale_sessions(db, now)
+                prune_expired_tokens(db, now)
+                _insert_session(
+                    db,
+                    session_id=session_id,
+                    account_id=account.id,
+                    installation_id=installation_id,
+                    session_expires_at=session_expires_at,
+                    now=now,
+                )
+                _insert_tokens(
+                    db,
+                    session_id=session_id,
+                    access_digest=access_digest,
+                    access_nonce=access_nonce,
+                    access_expires_at=access_expires_at,
+                    refresh_digest=refresh_digest,
+                    refresh_nonce=refresh_nonce,
+                    refresh_expires_at=refresh_expires_at,
+                    now=now,
+                )
+        except sqlite3.IntegrityError as exc:
+            if self.account_with_password(email) is not None:
+                raise DuplicateEmailError() from exc
+            raise
         return account
 
     def account_with_password(self, email: str) -> tuple[Account, str] | None:
@@ -187,18 +225,13 @@ class AuthRepository:
                 installation_id=installation_id,
                 now=now,
             )
-            db.execute(
-                "INSERT INTO auth_sessions"
-                "(id,account_id,installation_id,created_at,last_seen_at,"
-                "absolute_expires_at) VALUES(?,?,?,?,?,?)",
-                (
-                    session_id,
-                    account_id,
-                    installation_id,
-                    now,
-                    now,
-                    session_expires_at,
-                ),
+            _insert_session(
+                db,
+                session_id=session_id,
+                account_id=account_id,
+                installation_id=installation_id,
+                session_expires_at=session_expires_at,
+                now=now,
             )
             _insert_tokens(
                 db,
@@ -458,6 +491,53 @@ class AuthRepository:
                 return True
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return False
+
+
+def _insert_account(
+    db: sqlite3.Connection,
+    account: Account,
+    *,
+    password_hash: str,
+    now: int,
+) -> None:
+    db.execute(
+        "INSERT INTO accounts"
+        "(id,email,display_name,password_hash,status,created_at,updated_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (
+            account.id,
+            account.email,
+            account.display_name,
+            password_hash,
+            account.status,
+            now,
+            now,
+        ),
+    )
+
+
+def _insert_session(
+    db: sqlite3.Connection,
+    *,
+    session_id: str,
+    account_id: str,
+    installation_id: str,
+    session_expires_at: int,
+    now: int,
+) -> None:
+    db.execute(
+        "INSERT INTO auth_sessions"
+        "(id,account_id,installation_id,created_at,last_seen_at,"
+        "absolute_expires_at) VALUES(?,?,?,?,?,?)",
+        (
+            session_id,
+            account_id,
+            installation_id,
+            now,
+            now,
+            session_expires_at,
+        ),
+    )
 
 
 def _insert_tokens(
