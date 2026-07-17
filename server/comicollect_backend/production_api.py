@@ -186,7 +186,10 @@ class ProductionApi:
             _require_empty(body)
             return HTTPStatus.OK, {"account": context.account.public_json()}
         if method == "POST" and path == "/api/v2/sync":
-            if context.account.email_verified_at is None:
+            if (
+                context.account.email_verification_required
+                and context.account.email_verified_at is None
+            ):
                 raise AuthError(
                     HTTPStatus.FORBIDDEN,
                     "email_not_verified",

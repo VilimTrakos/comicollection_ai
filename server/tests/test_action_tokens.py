@@ -28,8 +28,18 @@ class ActionTokenCodecTest(unittest.TestCase):
         self.assertEqual(codec.digest(EMAIL_VERIFICATION, first.raw), first.digest)
         with self.assertRaises(ValueError):
             codec.digest(PASSWORD_RESET, first.raw)
+        prefix, mac = first.raw.rsplit(".", 1)
+        changed = ("A" if mac[0] != "A" else "B") + mac[1:]
         with self.assertRaises(ValueError):
-            codec.digest(EMAIL_VERIFICATION, first.raw[:-1] + "A")
+            codec.digest(EMAIL_VERIFICATION, f"{prefix}.{changed}")
+
+        alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        noncanonical_last = alphabet[alphabet.index(mac[-1]) + 1]
+        with self.assertRaises(ValueError):
+            codec.digest(
+                EMAIL_VERIFICATION,
+                f"{prefix}.{mac[:-1]}{noncanonical_last}",
+            )
 
 
 class ActionTokenSchemaTest(unittest.TestCase):
@@ -63,13 +73,13 @@ class ActionTokenSchemaTest(unittest.TestCase):
                 row[1]
                 for row in database.execute("PRAGMA table_info(auth_action_tokens)")
             }
-            verified_at = database.execute(
-                "SELECT email_verified_at FROM accounts WHERE id=?",
+            verification_required = database.execute(
+                "SELECT email_verification_required FROM accounts WHERE id=?",
                 (account.id,),
             ).fetchone()[0]
         self.assertEqual(version, SUPPORTED_AUTH_SCHEMA_VERSION)
         self.assertIn("consume_payload_digest", columns)
-        self.assertEqual(verified_at, 1_700_000_000_000)
+        self.assertEqual(verification_required, 0)
 
     def test_database_stores_action_digest_and_nonce_but_never_raw_token(self) -> None:
         repository = AuthRepository(self.database)

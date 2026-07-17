@@ -287,4 +287,5 @@ def _account(row: sqlite3.Row) -> Account:
         display_name=str(row["display_name"]),
         status=str(row["status"]),
         email_verified_at=row["email_verified_at"],
+        email_verification_required=bool(row["email_verification_required"]),
     )

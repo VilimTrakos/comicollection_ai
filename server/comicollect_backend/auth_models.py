@@ -28,6 +28,7 @@ class Account:
     display_name: str
     status: str
     email_verified_at: int | None
+    email_verification_required: bool
 
     def public_json(self) -> dict:
         return {

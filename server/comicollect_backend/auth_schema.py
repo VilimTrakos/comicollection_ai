@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SUPPORTED_AUTH_SCHEMA_VERSION = 3
+SUPPORTED_AUTH_SCHEMA_VERSION = 2
 MAX_ACTIVE_SESSIONS_PER_ACCOUNT = 10
 MAX_RETAINED_REVOKED_SESSIONS_PER_ACCOUNT = 50
 MAX_ACCESS_TOKENS_PER_SESSION = 4
@@ -103,6 +103,12 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
         """
     )
     _ensure_column(db, "auth_access_tokens", "token_nonce", "BLOB")
+    _ensure_column(
+        db,
+        "accounts",
+        "email_verification_required",
+        "INTEGER NOT NULL DEFAULT 0 CHECK(email_verification_required IN (0,1))",
+    )
     _ensure_column(db, "auth_refresh_tokens", "token_nonce", "BLOB")
     _ensure_column(db, "auth_refresh_tokens", "refresh_request_id", "TEXT")
     _ensure_column(
@@ -111,14 +117,6 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
         "replacement_access_digest",
         "BLOB",
     )
-    if 0 < latest < 3:
-        # Accounts created before verification existed had no possible way to
-        # prove ownership. Grandfather them once during the v3 rollout so an
-        # additive migration cannot unexpectedly disable their existing sync.
-        db.execute(
-            "UPDATE accounts SET email_verified_at=updated_at "
-            "WHERE email_verified_at IS NULL"
-        )
     db.execute(
         "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
         "VALUES(1,CAST(strftime('%s','now') AS INTEGER) * 1000)"
@@ -126,10 +124,6 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
     db.execute(
         "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
         "VALUES(2,CAST(strftime('%s','now') AS INTEGER) * 1000)"
-    )
-    db.execute(
-        "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
-        "VALUES(3,CAST(strftime('%s','now') AS INTEGER) * 1000)"
     )
 
 

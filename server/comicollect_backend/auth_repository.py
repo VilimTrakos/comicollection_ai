@@ -33,6 +33,7 @@ _REQUIRED_AUTH_SCHEMA: dict[str, frozenset[str]] = {
             "password_hash",
             "status",
             "email_verified_at",
+            "email_verification_required",
             "created_at",
             "updated_at",
         }
@@ -154,10 +155,23 @@ class AuthRepository:
         password_hash: str,
         now: int,
     ) -> Account:
-        account = Account(str(uuid.uuid4()), email, display_name, "active", None)
+        account = Account(
+            str(uuid.uuid4()),
+            email,
+            display_name,
+            "active",
+            None,
+            False,
+        )
         try:
             with self._lock, closing(self.connect()) as db, db:
-                _insert_account(db, account, password_hash=password_hash, now=now)
+                _insert_account(
+                    db,
+                    account,
+                    password_hash=password_hash,
+                    verification_required=False,
+                    now=now,
+                )
         except sqlite3.IntegrityError as exc:
             raise DuplicateEmailError() from exc
         return account
@@ -180,12 +194,25 @@ class AuthRepository:
     ) -> Account:
         """Create a public account and its first session in one transaction."""
 
-        account = Account(str(uuid.uuid4()), email, display_name, "active", None)
+        account = Account(
+            str(uuid.uuid4()),
+            email,
+            display_name,
+            "active",
+            None,
+            True,
+        )
         session_id = str(uuid.uuid4())
         try:
             with self._lock, closing(self.connect()) as db, db:
                 db.execute("BEGIN IMMEDIATE")
-                _insert_account(db, account, password_hash=password_hash, now=now)
+                _insert_account(
+                    db,
+                    account,
+                    password_hash=password_hash,
+                    verification_required=True,
+                    now=now,
+                )
                 prune_stale_sessions(db, now)
                 prune_expired_tokens(db, now)
                 _insert_session(
@@ -557,18 +584,20 @@ def _insert_account(
     account: Account,
     *,
     password_hash: str,
+    verification_required: bool,
     now: int,
 ) -> None:
     db.execute(
         "INSERT INTO accounts"
-        "(id,email,display_name,password_hash,status,created_at,updated_at) "
-        "VALUES(?,?,?,?,?,?,?)",
+        "(id,email,display_name,password_hash,status,email_verification_required,"
+        "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
         (
             account.id,
             account.email,
             account.display_name,
             password_hash,
             account.status,
+            int(verification_required),
             now,
             now,
         ),
@@ -632,4 +661,5 @@ def _account(row: sqlite3.Row) -> Account:
         display_name=str(row["display_name"]),
         status=str(row["status"]),
         email_verified_at=row["email_verified_at"],
+        email_verification_required=bool(row["email_verification_required"]),
     )
