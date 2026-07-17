@@ -44,6 +44,33 @@ void main() {
         'Dylan Dog',
       ]);
     });
+
+    test(
+      'isolates account histories and preserves the guest legacy key',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'recent_searches': ['Guest query'],
+          'account.one.recent_searches': ['Account one query'],
+        });
+        const guest = SearchHistoryRepository();
+        const accountOne = SearchHistoryRepository(namespace: 'account.one');
+        const accountTwo = SearchHistoryRepository(namespace: 'account.two');
+
+        await accountTwo.remember('Account two query');
+
+        expect(await guest.load(), ['Guest query']);
+        expect(await accountOne.load(), ['Account one query']);
+        expect(await accountTwo.load(), ['Account two query']);
+        final preferences = await SharedPreferences.getInstance();
+        expect(preferences.getStringList('recent_searches'), ['Guest query']);
+        expect(preferences.getStringList('account.one.recent_searches'), [
+          'Account one query',
+        ]);
+        expect(preferences.getStringList('account.two.recent_searches'), [
+          'Account two query',
+        ]);
+      },
+    );
   });
 
   group('ReleaseWatchRepository', () {
@@ -72,6 +99,33 @@ void main() {
         ['two'],
       );
     });
+
+    test(
+      'isolates account watches and preserves the guest legacy key',
+      () async {
+        SharedPreferences.setMockInitialValues({
+          'release_watch_ids': ['guest-issue'],
+          'account.one.release_watch_ids': ['account-one-issue'],
+        });
+        const guest = ReleaseWatchRepository();
+        const accountOne = ReleaseWatchRepository(namespace: 'account.one');
+        const accountTwo = ReleaseWatchRepository(namespace: 'account.two');
+
+        await accountTwo.toggle('account-two-issue', const {});
+
+        expect(await guest.load(), {'guest-issue'});
+        expect(await accountOne.load(), {'account-one-issue'});
+        expect(await accountTwo.load(), {'account-two-issue'});
+        final preferences = await SharedPreferences.getInstance();
+        expect(preferences.getStringList('release_watch_ids'), ['guest-issue']);
+        expect(preferences.getStringList('account.one.release_watch_ids'), [
+          'account-one-issue',
+        ]);
+        expect(preferences.getStringList('account.two.release_watch_ids'), [
+          'account-two-issue',
+        ]);
+      },
+    );
   });
 
   group('SyncSettingsRepository', () {

@@ -163,7 +163,10 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
       final pages = [
         HomePage(controller: widget.controller),
         ShelfPage(controller: widget.controller),
-        SearchPage(controller: widget.controller),
+        SearchPage(
+          controller: widget.controller,
+          historyRepository: widget.controller.searchHistoryRepository,
+        ),
         SettingsPage(
           controller: widget.controller,
           accountEmail: widget.accountEmail,

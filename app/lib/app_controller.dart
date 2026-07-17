@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 import 'data/catalog_repository.dart';
 import 'data/collection_repository.dart';
 import 'data/local_database.dart';
+import 'data/release_watch_repository.dart';
+import 'data/search_history_repository.dart';
 import 'data/settings_repository.dart';
 import 'data/sync_service.dart';
 import 'models/catalog_issue.dart';
@@ -42,6 +44,8 @@ class AppController extends ChangeNotifier {
     CatalogRepository? catalog,
     SyncService? syncService,
     CollectionRepository? collectionRepository,
+    ReleaseWatchRepository? releaseWatchRepository,
+    SearchHistoryRepository? searchHistoryRepository,
     SettingsRepository? settingsRepository,
     CatalogService? catalogService,
     SyncCoordinator? syncCoordinator,
@@ -63,6 +67,10 @@ class AppController extends ChangeNotifier {
         catalogService?.collections ??
         syncCoordinator?.collections ??
         CollectionRepository(this.db);
+    this.releaseWatchRepository =
+        releaseWatchRepository ?? const ReleaseWatchRepository();
+    this.searchHistoryRepository =
+        searchHistoryRepository ?? const SearchHistoryRepository();
     this.settingsRepository =
         settingsRepository ??
         catalogService?.settings ??
@@ -127,6 +135,8 @@ class AppController extends ChangeNotifier {
   final String Function() _idGenerator;
 
   late final CollectionRepository collectionRepository;
+  late final ReleaseWatchRepository releaseWatchRepository;
+  late final SearchHistoryRepository searchHistoryRepository;
   late final SettingsRepository settingsRepository;
   late final CatalogService catalogService;
   late final SyncService syncService;

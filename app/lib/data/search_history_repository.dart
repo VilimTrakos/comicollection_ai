@@ -2,15 +2,18 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 /// Persists the small, ordered list of queries shown on the search screen.
 class SearchHistoryRepository {
-  const SearchHistoryRepository({this.maximumEntries = 6});
+  const SearchHistoryRepository({this.maximumEntries = 6, this.namespace = ''});
 
   static const _key = 'recent_searches';
 
   final int maximumEntries;
+  final String namespace;
 
   Future<List<String>> load() async {
     final preferences = await SharedPreferences.getInstance();
-    return List.unmodifiable(preferences.getStringList(_key) ?? const []);
+    return List.unmodifiable(
+      preferences.getStringList(_namespacedKey) ?? const [],
+    );
   }
 
   Future<List<String>> remember(String query) async {
@@ -25,7 +28,9 @@ class SearchHistoryRepository {
       ),
     ].take(maximumEntries).toList(growable: false);
     final preferences = await SharedPreferences.getInstance();
-    await preferences.setStringList(_key, next);
+    await preferences.setStringList(_namespacedKey, next);
     return List.unmodifiable(next);
   }
+
+  String get _namespacedKey => namespace.isEmpty ? _key : '$namespace.$_key';
 }

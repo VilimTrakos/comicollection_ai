@@ -43,7 +43,10 @@ class HomePage extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(
-                builder: (_) => UpcomingPage(controller: controller),
+                builder: (_) => UpcomingPage(
+                  controller: controller,
+                  releaseWatchRepository: controller.releaseWatchRepository,
+                ),
               ),
             ),
             child: SizedBox(

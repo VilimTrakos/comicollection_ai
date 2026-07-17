@@ -1,6 +1,8 @@
 import '../app_controller.dart';
 import '../data/catalog_repository.dart';
 import '../data/local_database.dart';
+import '../data/release_watch_repository.dart';
+import '../data/search_history_repository.dart';
 import '../data/settings_repository.dart';
 import '../data/sync_service.dart';
 import '../data/sync_settings_repository.dart';
@@ -57,6 +59,8 @@ final class AppRuntimeFactory implements AppRuntimeProvider {
     try {
       final settings = SettingsRepository(namespace: namespace);
       final syncSettings = SyncSettingsRepository(namespace: namespace);
+      final searchHistory = SearchHistoryRepository(namespace: namespace);
+      final releaseWatch = ReleaseWatchRepository(namespace: namespace);
       final sync = SyncService(
         database,
         settingsRepository: syncSettings,
@@ -66,6 +70,8 @@ final class AppRuntimeFactory implements AppRuntimeProvider {
       controller = AppController(
         db: database,
         catalog: CatalogRepository(),
+        searchHistoryRepository: searchHistory,
+        releaseWatchRepository: releaseWatch,
         settingsRepository: settings,
         syncService: sync,
       );

@@ -77,6 +77,40 @@ void main() {
         accountRuntime.controller.settingsRepository.namespace,
         'account.account-1',
       );
+      expect(guest.controller.searchHistoryRepository.namespace, isEmpty);
+      expect(guest.controller.releaseWatchRepository.namespace, isEmpty);
+      expect(
+        accountRuntime.controller.searchHistoryRepository.namespace,
+        'account.account-1',
+      );
+      expect(
+        accountRuntime.controller.releaseWatchRepository.namespace,
+        'account.account-1',
+      );
+      await guest.controller.searchHistoryRepository.remember('guest query');
+      await accountRuntime.controller.searchHistoryRepository.remember(
+        'account query',
+      );
+      await guest.controller.releaseWatchRepository.toggle(
+        'guest-issue',
+        const {},
+      );
+      await accountRuntime.controller.releaseWatchRepository.toggle(
+        'account-issue',
+        const {},
+      );
+      expect(await guest.controller.searchHistoryRepository.load(), [
+        'guest query',
+      ]);
+      expect(await accountRuntime.controller.searchHistoryRepository.load(), [
+        'account query',
+      ]);
+      expect(await guest.controller.releaseWatchRepository.load(), {
+        'guest-issue',
+      });
+      expect(await accountRuntime.controller.releaseWatchRepository.load(), {
+        'account-issue',
+      });
       expect(
         accountRuntime.controller.syncService.productionServerUrl,
         'https://sync.example.test',
