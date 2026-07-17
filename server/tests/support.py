@@ -8,11 +8,21 @@ from typing import Any, Iterator, Mapping
 
 from comicollect_backend.auth_repository import AuthRepository
 from comicollect_backend.auth_service import AuthService
+from comicollect_backend.email_delivery import DeliveryReceipt, EmailSender, OutboundEmail
 from comicollect_backend.passwords import PasswordHasher, ScryptParams
 
 
 PASSWORD = "Correct horse battery staple 42!"
 PEPPER = b"p" * 32
+
+
+class RecordingEmailSender:
+    def __init__(self):
+        self.messages: list[OutboundEmail] = []
+
+    def send(self, message: OutboundEmail) -> DeliveryReceipt:
+        self.messages.append(message)
+        return DeliveryReceipt(provider_message_id=f"recording-{len(self.messages)}")
 
 
 class MutableClock:
@@ -90,6 +100,9 @@ def make_auth_service(
     access_ttl_ms: int = 60_000,
     refresh_ttl_ms: int = 600_000,
     registration_enabled: bool = True,
+    email_sender: EmailSender | None = None,
+    email_verification_ttl_ms: int = 24 * 60 * 60 * 1000,
+    password_reset_ttl_ms: int = 60 * 60 * 1000,
 ) -> AuthService:
     return AuthService(
         repository=AuthRepository(database),
@@ -100,6 +113,9 @@ def make_auth_service(
         refresh_ttl_ms=refresh_ttl_ms,
         session_ttl_ms=3_600_000,
         registration_enabled=registration_enabled,
+        email_sender=email_sender,
+        email_verification_ttl_ms=email_verification_ttl_ms,
+        password_reset_ttl_ms=password_reset_ttl_ms,
     )
 
 

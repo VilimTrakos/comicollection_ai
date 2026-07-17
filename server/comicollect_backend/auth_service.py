@@ -8,8 +8,15 @@ import unicodedata
 from http import HTTPStatus
 from typing import Callable
 
+from .account_action_service import AccountActionService
+from .auth_action_repository import AuthActionRepository
 from .auth_models import Account, AuthContext, AuthError, TokenPair
-from .auth_repository import AuthRepository, DuplicateEmailError
+from .auth_repository import (
+    AuthRepository,
+    CredentialsChangedError,
+    DuplicateEmailError,
+)
+from .email_delivery import EmailSender
 from .passwords import PasswordHasher
 from .rate_limit import RateLimiter, RatePolicy
 from .tokens import OpaqueTokenCodec, digest_token
@@ -30,13 +37,17 @@ class AuthService:
         access_ttl_ms: int = 15 * 60 * 1000,
         refresh_ttl_ms: int = 30 * 24 * 60 * 60 * 1000,
         session_ttl_ms: int = 90 * 24 * 60 * 60 * 1000,
+        email_sender: EmailSender | None = None,
+        email_verification_ttl_ms: int = 24 * 60 * 60 * 1000,
+        password_reset_ttl_ms: int = 60 * 60 * 1000,
     ):
         if not 0 < access_ttl_ms < refresh_ttl_ms <= session_ttl_ms:
             raise ValueError("invalid session lifetimes")
         self.repository = repository
         self.hasher = hasher
         self.clock = clock or (lambda: int(time.time() * 1000))
-        self.tokens = OpaqueTokenCodec(token_key or hasher.pepper)
+        credential_key = token_key or hasher.pepper
+        self.tokens = OpaqueTokenCodec(credential_key)
         self.repository.bind_token_key(self.tokens.key_fingerprint)
         self.registration_enabled = registration_enabled
         self.access_ttl_ms = access_ttl_ms
@@ -50,7 +61,22 @@ class AuthService:
                 "login-account": RatePolicy(10, 60_000),
                 "refresh-ip": RatePolicy(300, 60_000),
                 "refresh-session": RatePolicy(10, 60_000),
+                "email-verification-ip": RatePolicy(20, 60 * 60 * 1000),
+                "email-verification-account": RatePolicy(5, 60 * 60 * 1000),
+                "password-reset-ip": RatePolicy(20, 60 * 60 * 1000),
+                "password-reset-account": RatePolicy(5, 60 * 60 * 1000),
+                "action-confirm-ip": RatePolicy(100, 60_000),
             },
+        )
+        self.account_actions = AccountActionService(
+            AuthActionRepository(repository),
+            hasher,
+            token_key=credential_key,
+            rate_limiter=self.rate_limiter,
+            clock=self.clock,
+            email_sender=email_sender,
+            email_verification_ttl_ms=email_verification_ttl_ms,
+            password_reset_ttl_ms=password_reset_ttl_ms,
         )
         self._dummy_hash = self.hasher.hash("not-a-real-password")
 
@@ -124,13 +150,26 @@ class AuthService:
             raise _invalid_credentials()
         account = stored[0]
         now = self.clock()
-        if self.hasher.needs_rehash(encoded):
-            self.repository.update_password_hash(
+        current_hash = encoded
+        try:
+            if self.hasher.needs_rehash(encoded):
+                current_hash = self.hasher.hash(password)
+                self.repository.update_password_hash(
+                    account.id,
+                    current_hash,
+                    now,
+                    expected_hash=encoded,
+                )
+            pair = self._new_session(
                 account.id,
-                self.hasher.hash(password),
+                current_hash,
+                installation,
                 now,
             )
-        pair = self._new_session(account.id, installation, now)
+        except CredentialsChangedError as error:
+            # A password reset, suspension, or credential update won the race
+            # after verification. Never mint a session from stale proof.
+            raise _invalid_credentials() from error
         return {"account": account.public_json(), **pair.json()}
 
     def refresh(
@@ -235,6 +274,51 @@ class AuthService:
     def me(self, access_token: str) -> dict:
         return self.authenticate_access(access_token).account.public_json()
 
+    def request_email_verification(
+        self,
+        context: AuthContext,
+        *,
+        rate_key: str,
+    ) -> None:
+        self.account_actions.request_email_verification(
+            context,
+            rate_key=rate_key,
+        )
+
+    def confirm_email_verification(
+        self,
+        context: AuthContext,
+        *,
+        token: str,
+        request_id: str,
+        rate_key: str,
+    ) -> dict:
+        account = self.account_actions.confirm_email_verification(
+            context,
+            token=token,
+            request_id=request_id,
+            rate_key=rate_key,
+        )
+        return {"account": account.public_json()}
+
+    def request_password_reset(self, email: object, *, rate_key: str) -> None:
+        self.account_actions.request_password_reset(email, rate_key=rate_key)
+
+    def confirm_password_reset(
+        self,
+        *,
+        token: str,
+        new_password: str,
+        request_id: str,
+        rate_key: str,
+    ) -> None:
+        self.account_actions.confirm_password_reset(
+            token=token,
+            new_password=new_password,
+            request_id=request_id,
+            rate_key=rate_key,
+        )
+
     def _register_account(
         self,
         email: str,
@@ -279,6 +363,7 @@ class AuthService:
     def _new_session(
         self,
         account_id: str,
+        expected_password_hash: str,
         installation_id: str,
         now: int,
     ) -> TokenPair:
@@ -288,6 +373,7 @@ class AuthService:
         refresh_expires = now + self.refresh_ttl_ms
         self.repository.create_session(
             account_id=account_id,
+            expected_password_hash=expected_password_hash,
             installation_id=installation_id,
             access_digest=access_token.digest,
             access_nonce=access_token.nonce,
@@ -355,7 +441,12 @@ def _email(raw: str) -> str:
         or value.count("@") != 1
         or not value.split("@", 1)[0]
         or "." not in value.split("@", 1)[1]
-        or any(ord(character) < 32 for character in value)
+        or any(
+            character.isspace()
+            or ord(character) < 32
+            or ord(character) == 127
+            for character in value
+        )
     ):
         raise AuthError(400, "invalid_request", "Email is invalid")
     return value

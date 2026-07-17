@@ -9,6 +9,7 @@ from typing import Mapping, Sequence
 from comicollect_backend.auth_repository import AuthRepository
 from comicollect_backend.auth_service import AuthService
 from comicollect_backend.config import load_config
+from comicollect_backend.email_delivery import build_email_sender
 from comicollect_backend.passwords import PasswordHasher
 from comicollect_backend.production_api import ProductionApi
 from comicollect_backend.tenant_store import TenantStore
@@ -30,6 +31,7 @@ def create_application(
         access_ttl_ms=config.access_ttl_ms,
         refresh_ttl_ms=config.refresh_ttl_ms,
         session_ttl_ms=config.session_ttl_ms,
+        email_sender=build_email_sender(config.email_delivery),
     )
     api = ProductionApi(
         auth,

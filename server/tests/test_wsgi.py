@@ -265,6 +265,25 @@ class WsgiApplicationTest(unittest.TestCase):
             self.assertEqual(json.loads(payload), {"ok": True})
             self.assertTrue((root / "data" / "accounts.sqlite3").exists())
 
+    def test_factory_injects_configured_email_sender_into_account_actions(self) -> None:
+        sender = object()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            pepper = root / "pepper"
+            pepper.write_bytes(b"p" * 32)
+            pepper.chmod(0o440)
+            with patch("comicollect_wsgi.build_email_sender", return_value=sender) as build:
+                application = create_application(
+                    {
+                        "COMICOLLECT_DATA_ROOT": str(root / "data"),
+                        "COMICOLLECT_PASSWORD_PEPPER_FILE": str(pepper),
+                        "COMICOLLECT_PUBLIC_REGISTRATION": "false",
+                    }
+                )
+
+        build.assert_called_once()
+        self.assertIs(application.api.auth.account_actions.email_sender, sender)
+
     def test_gunicorn_profile_preserves_single_process_invariants(self) -> None:
         config_path = Path(__file__).parents[1] / "gunicorn.conf.py"
         with patch.dict(

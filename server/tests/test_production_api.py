@@ -44,7 +44,12 @@ class ProductionApiTest(unittest.TestCase):
         response = self.api.handle(method, path, headers or {}, body)
         return decode_http_response(response)
 
-    def register(self, email: str = "reader@example.com") -> dict:
+    def register(
+        self,
+        email: str = "reader@example.com",
+        *,
+        verified: bool = True,
+    ) -> dict:
         status, _, payload = self.request(
             "POST",
             "/api/v1/auth/register",
@@ -57,6 +62,12 @@ class ProductionApiTest(unittest.TestCase):
             {"content-type": "application/json"},
         )
         self.assertEqual(status, 201)
+        if verified:
+            with self.auth.repository.write_transaction() as database:
+                database.execute(
+                    "UPDATE accounts SET email_verified_at=? WHERE id=?",
+                    (self.clock(), payload["account"]["id"]),
+                )
         return payload
 
     def test_register_login_and_authenticated_profile_contract(self) -> None:

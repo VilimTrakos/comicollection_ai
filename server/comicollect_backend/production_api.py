@@ -139,6 +139,21 @@ class ProductionApi:
                 request_id=value["request_id"],
                 rate_key=client_key,
             )
+        if method == "POST" and path == "/api/v1/auth/password-reset/request":
+            value = _json_object(body, headers, MAX_AUTH_BODY)
+            _keys(value, {"email"})
+            self.auth.request_password_reset(value["email"], rate_key=client_key)
+            return HTTPStatus.ACCEPTED, {"accepted": True}
+        if method == "POST" and path == "/api/v1/auth/password-reset/confirm":
+            value = _json_object(body, headers, MAX_AUTH_BODY)
+            _keys(value, {"token", "new_password", "request_id"})
+            self.auth.confirm_password_reset(
+                token=value["token"],
+                new_password=value["new_password"],
+                request_id=value["request_id"],
+                rate_key=client_key,
+            )
+            return HTTPStatus.NO_CONTENT, None
 
         token = _bearer(headers)
         if method == "POST" and path == "/api/v1/auth/logout":
@@ -147,10 +162,36 @@ class ProductionApi:
             self.auth.logout(token)
             return HTTPStatus.NO_CONTENT, None
         context = self.auth.authenticate_access(token)
+        if (
+            method == "POST"
+            and path == "/api/v1/account/email-verification/request"
+        ):
+            value = _json_object(body, headers, MAX_AUTH_BODY)
+            _keys(value, set())
+            self.auth.request_email_verification(context, rate_key=client_key)
+            return HTTPStatus.ACCEPTED, {"accepted": True}
+        if (
+            method == "POST"
+            and path == "/api/v1/account/email-verification/confirm"
+        ):
+            value = _json_object(body, headers, MAX_AUTH_BODY)
+            _keys(value, {"token", "request_id"})
+            return HTTPStatus.OK, self.auth.confirm_email_verification(
+                context,
+                token=value["token"],
+                request_id=value["request_id"],
+                rate_key=client_key,
+            )
         if method == "GET" and path == "/api/v1/account/me":
             _require_empty(body)
             return HTTPStatus.OK, {"account": context.account.public_json()}
         if method == "POST" and path == "/api/v2/sync":
+            if context.account.email_verified_at is None:
+                raise AuthError(
+                    HTTPStatus.FORBIDDEN,
+                    "email_not_verified",
+                    "Email verification is required before synchronization",
+                )
             value = _json_object(body, headers, MAX_SYNC_BODY)
             return HTTPStatus.OK, self.tenants.sync(context.account_id, value)
         if method == "POST" and path == "/api/v1/sync":

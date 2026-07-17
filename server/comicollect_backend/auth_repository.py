@@ -6,9 +6,10 @@ import hmac
 import sqlite3
 import stat
 import uuid
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from threading import RLock
+from typing import Iterator
 
 from .auth_models import AccessRecord, Account, AuthContext, RefreshRecord
 from .auth_schema import (
@@ -70,10 +71,30 @@ _REQUIRED_AUTH_SCHEMA: dict[str, frozenset[str]] = {
             "replacement_access_digest",
         }
     ),
+    "auth_action_tokens": frozenset(
+        {
+            "token_digest",
+            "token_nonce",
+            "account_id",
+            "purpose",
+            "created_at",
+            "expires_at",
+            "superseded_at",
+            "consumed_at",
+            "consume_request_id",
+            "consume_payload_digest",
+        }
+    ),
 }
 
 
 class DuplicateEmailError(Exception):
+    pass
+
+
+class CredentialsChangedError(Exception):
+    """The account changed after a password was verified."""
+
     pass
 
 
@@ -92,6 +113,14 @@ class AuthRepository:
         db.execute("PRAGMA busy_timeout=15000")
         db.execute("PRAGMA foreign_keys=ON")
         return db
+
+    @contextmanager
+    def write_transaction(self) -> Iterator[sqlite3.Connection]:
+        """Serialize one explicit auth-database write transaction."""
+
+        with self._lock, closing(self.connect()) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            yield database
 
     def _initialize(self) -> None:
         with closing(self.connect()) as db, db:
@@ -193,17 +222,34 @@ class AuthRepository:
             return None
         return _account(row), str(row["password_hash"])
 
-    def update_password_hash(self, account_id: str, encoded: str, now: int) -> None:
+    def update_password_hash(
+        self,
+        account_id: str,
+        encoded: str,
+        now: int,
+        *,
+        expected_hash: str | None = None,
+    ) -> None:
         with self._lock, closing(self.connect()) as db, db:
-            db.execute(
-                "UPDATE accounts SET password_hash=?,updated_at=? WHERE id=?",
-                (encoded, now, account_id),
-            )
+            if expected_hash is None:
+                db.execute(
+                    "UPDATE accounts SET password_hash=?,updated_at=? WHERE id=?",
+                    (encoded, now, account_id),
+                )
+                return
+            updated = db.execute(
+                "UPDATE accounts SET password_hash=?,updated_at=? "
+                "WHERE id=? AND password_hash=? AND status='active'",
+                (encoded, now, account_id, expected_hash),
+            ).rowcount
+            if updated != 1:
+                raise CredentialsChangedError()
 
     def create_session(
         self,
         *,
         account_id: str,
+        expected_password_hash: str,
         installation_id: str,
         access_digest: bytes,
         access_nonce: bytes,
@@ -217,6 +263,19 @@ class AuthRepository:
         session_id = str(uuid.uuid4())
         with self._lock, closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            account = db.execute(
+                "SELECT password_hash,status FROM accounts WHERE id=?",
+                (account_id,),
+            ).fetchone()
+            if (
+                account is None
+                or account["status"] != "active"
+                or not hmac.compare_digest(
+                    str(account["password_hash"]),
+                    expected_password_hash,
+                )
+            ):
+                raise CredentialsChangedError()
             prune_stale_sessions(db, now)
             prune_expired_tokens(db, now)
             prepare_new_session(

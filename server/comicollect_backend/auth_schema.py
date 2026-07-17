@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 
 
-SUPPORTED_AUTH_SCHEMA_VERSION = 2
+SUPPORTED_AUTH_SCHEMA_VERSION = 3
 MAX_ACTIVE_SESSIONS_PER_ACCOUNT = 10
 MAX_RETAINED_REVOKED_SESSIONS_PER_ACCOUNT = 50
 MAX_ACCESS_TOKENS_PER_SESSION = 4
@@ -83,6 +83,23 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
         );
         CREATE INDEX IF NOT EXISTS idx_refresh_session
           ON auth_refresh_tokens(session_id);
+        CREATE TABLE IF NOT EXISTS auth_action_tokens(
+          token_digest BLOB PRIMARY KEY,
+          token_nonce BLOB NOT NULL,
+          account_id TEXT NOT NULL REFERENCES accounts(id),
+          purpose TEXT NOT NULL
+            CHECK(purpose IN ('email_verification','password_reset')),
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          superseded_at INTEGER,
+          consumed_at INTEGER,
+          consume_request_id TEXT,
+          consume_payload_digest BLOB
+        );
+        CREATE INDEX IF NOT EXISTS idx_action_account_purpose
+          ON auth_action_tokens(account_id,purpose,created_at);
+        CREATE INDEX IF NOT EXISTS idx_action_expiry
+          ON auth_action_tokens(expires_at);
         """
     )
     _ensure_column(db, "auth_access_tokens", "token_nonce", "BLOB")
@@ -94,6 +111,14 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
         "replacement_access_digest",
         "BLOB",
     )
+    if 0 < latest < 3:
+        # Accounts created before verification existed had no possible way to
+        # prove ownership. Grandfather them once during the v3 rollout so an
+        # additive migration cannot unexpectedly disable their existing sync.
+        db.execute(
+            "UPDATE accounts SET email_verified_at=updated_at "
+            "WHERE email_verified_at IS NULL"
+        )
     db.execute(
         "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
         "VALUES(1,CAST(strftime('%s','now') AS INTEGER) * 1000)"
@@ -101,6 +126,10 @@ def initialize_auth_schema(db: sqlite3.Connection) -> None:
     db.execute(
         "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
         "VALUES(2,CAST(strftime('%s','now') AS INTEGER) * 1000)"
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO auth_schema_migrations(version,applied_at) "
+        "VALUES(3,CAST(strftime('%s','now') AS INTEGER) * 1000)"
     )
 
 
