@@ -218,8 +218,8 @@ void main() {
       installationIds: InstallationIdRepository(),
       now: () => now,
     );
-    final ascii = (int count) => List.filled(count, 'a').join();
-    final emoji = (int count) => List.filled(count, '😀').join();
+    String ascii(int count) => List.filled(count, 'a').join();
+    String emoji(int count) => List.filled(count, '😀').join();
 
     for (final input in [
       (password: ascii(11), displayName: 'Collector'),

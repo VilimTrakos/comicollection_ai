@@ -1,5 +1,4 @@
 import 'package:comicollect/app/account_database_path_resolver.dart';
-import 'package:comicollect/data/api_token_store.dart';
 import 'package:comicollect/data/settings_repository.dart';
 import 'package:comicollect/data/sync_settings_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
