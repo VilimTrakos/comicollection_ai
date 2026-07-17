@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -17,6 +17,22 @@ MAX_SESSION_TTL_SECONDS = 365 * 24 * 60 * 60
 MAX_TENANT_STORAGE_BYTES = 10 * 1024 * 1024 * 1024
 MAX_DISK_RESERVE_BYTES = 100 * 1024 * 1024 * 1024
 MAX_BACKUP_RESERVE_BYTES = 100 * 1024 * 1024 * 1024
+MAX_SMTP_TIMEOUT_SECONDS = 30
+
+
+@dataclass(frozen=True)
+class EmailDeliveryConfig:
+    """Validated adapter settings; the password is deliberately repr-safe."""
+
+    transport: str
+    host: str
+    port: int
+    security: str
+    username: str | None
+    password: str | None = field(repr=False)
+    from_address: str
+    from_name: str
+    timeout_seconds: int
 
 
 @dataclass(frozen=True)
@@ -34,6 +50,7 @@ class ProductionConfig:
     tenant_storage_limit_bytes: int
     disk_reserve_bytes: int
     backup_reserve_bytes: int
+    email_delivery: EmailDeliveryConfig
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ProductionConfig":
@@ -80,6 +97,14 @@ def load_config(env: Mapping[str, str] | None = None) -> ProductionConfig:
     )
     if not access < refresh <= session:
         raise ValueError("token lifetimes must satisfy access < refresh <= session")
+    registration_enabled = _boolean(
+        values.get("COMICOLLECT_PUBLIC_REGISTRATION", "false")
+    )
+    email_delivery = _email_delivery(values)
+    if registration_enabled and email_delivery.transport == "disabled":
+        raise ValueError(
+            "public registration requires configured email delivery"
+        )
     return ProductionConfig(
         host=values.get("COMICOLLECT_HOST", "127.0.0.1"),
         port=port,
@@ -93,9 +118,7 @@ def load_config(env: Mapping[str, str] | None = None) -> ProductionConfig:
         ),
         password_pepper=pepper,
         scrypt=params,
-        registration_enabled=_boolean(
-            values.get("COMICOLLECT_PUBLIC_REGISTRATION", "false")
-        ),
+        registration_enabled=registration_enabled,
         access_ttl_ms=access * 1000,
         refresh_ttl_ms=refresh * 1000,
         session_ttl_ms=session * 1000,
@@ -117,6 +140,7 @@ def load_config(env: Mapping[str, str] | None = None) -> ProductionConfig:
             1024 * 1024 * 1024,
             MAX_BACKUP_RESERVE_BYTES,
         ),
+        email_delivery=email_delivery,
     )
 
 
@@ -211,4 +235,161 @@ def _bounded_bytes(
     value = _integer(values, key, default)
     if not 0 < value <= maximum:
         raise ValueError(f"{key} must be between 1 and {maximum} bytes")
+    return value
+
+
+def _email_delivery(values: Mapping[str, str]) -> EmailDeliveryConfig:
+    transport = values.get("COMICOLLECT_EMAIL_TRANSPORT", "disabled").strip().lower()
+    smtp_keys = (
+        "COMICOLLECT_SMTP_HOST",
+        "COMICOLLECT_SMTP_PORT",
+        "COMICOLLECT_SMTP_SECURITY",
+        "COMICOLLECT_SMTP_USERNAME",
+        "COMICOLLECT_SMTP_PASSWORD",
+        "COMICOLLECT_SMTP_PASSWORD_FILE",
+        "COMICOLLECT_SMTP_TIMEOUT_SECONDS",
+        "COMICOLLECT_EMAIL_FROM_ADDRESS",
+        "COMICOLLECT_EMAIL_FROM_NAME",
+    )
+    if transport == "disabled":
+        if any(values.get(key, "") for key in smtp_keys):
+            raise ValueError("SMTP settings require COMICOLLECT_EMAIL_TRANSPORT=smtp")
+        return EmailDeliveryConfig(
+            transport="disabled",
+            host="",
+            port=0,
+            security="",
+            username=None,
+            password=None,
+            from_address="",
+            from_name="",
+            timeout_seconds=0,
+        )
+    if transport != "smtp":
+        raise ValueError("COMICOLLECT_EMAIL_TRANSPORT must be disabled or smtp")
+
+    security = values.get("COMICOLLECT_SMTP_SECURITY", "starttls").strip().lower()
+    if security not in {"starttls", "implicit_tls"}:
+        raise ValueError(
+            "COMICOLLECT_SMTP_SECURITY must be starttls or implicit_tls"
+        )
+    host = values.get("COMICOLLECT_SMTP_HOST", "").strip()
+    if (
+        not host
+        or len(host) > 253
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in host
+        )
+    ):
+        raise ValueError("COMICOLLECT_SMTP_HOST is invalid")
+    port = _integer(
+        values,
+        "COMICOLLECT_SMTP_PORT",
+        465 if security == "implicit_tls" else 587,
+    )
+    if not 1 <= port <= 65535:
+        raise ValueError("COMICOLLECT_SMTP_PORT is invalid")
+    timeout = _integer(values, "COMICOLLECT_SMTP_TIMEOUT_SECONDS", 10)
+    if not 1 <= timeout <= MAX_SMTP_TIMEOUT_SECONDS:
+        raise ValueError(
+            "COMICOLLECT_SMTP_TIMEOUT_SECONDS must be between 1 and "
+            f"{MAX_SMTP_TIMEOUT_SECONDS}"
+        )
+
+    from_address = _configured_mailbox(
+        values.get("COMICOLLECT_EMAIL_FROM_ADDRESS", ""),
+        "COMICOLLECT_EMAIL_FROM_ADDRESS",
+    )
+    from_name = values.get("COMICOLLECT_EMAIL_FROM_NAME", "Comicollect").strip()
+    if (
+        not from_name
+        or len(from_name) > 100
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in from_name
+        )
+    ):
+        raise ValueError("COMICOLLECT_EMAIL_FROM_NAME is invalid")
+
+    raw_username = values.get("COMICOLLECT_SMTP_USERNAME", "")
+    username = raw_username.strip() or None
+    if username is not None and (
+        username != raw_username
+        or len(username) > 512
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in username
+        )
+    ):
+        raise ValueError("COMICOLLECT_SMTP_USERNAME is invalid")
+    password = _smtp_password(values)
+    if (username is None) != (password is None):
+        raise ValueError("SMTP username and password must be configured together")
+
+    return EmailDeliveryConfig(
+        transport="smtp",
+        host=host,
+        port=port,
+        security=security,
+        username=username,
+        password=password,
+        from_address=from_address,
+        from_name=from_name,
+        timeout_seconds=timeout,
+    )
+
+
+def _smtp_password(values: Mapping[str, str]) -> str | None:
+    inline = values.get("COMICOLLECT_SMTP_PASSWORD", "")
+    file_name = values.get("COMICOLLECT_SMTP_PASSWORD_FILE", "")
+    if inline and file_name:
+        raise ValueError(
+            "configure at most one COMICOLLECT_SMTP_PASSWORD or "
+            "COMICOLLECT_SMTP_PASSWORD_FILE"
+        )
+    if not inline and not file_name:
+        return None
+    if inline:
+        secret = inline
+    else:
+        path = _absolute_path(file_name, "COMICOLLECT_SMTP_PASSWORD_FILE")
+        metadata = path.stat()
+        if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("SMTP password must be a regular file")
+        forbidden = (
+            stat.S_IWUSR
+            | stat.S_IXUSR
+            | stat.S_IWGRP
+            | stat.S_IXGRP
+            | stat.S_IRWXO
+        )
+        if metadata.st_mode & forbidden:
+            raise ValueError(
+                "SMTP password file must be read-only, non-executable, and "
+                "not world accessible"
+            )
+        try:
+            secret = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("SMTP password file must contain UTF-8 text") from error
+    if not secret or "\0" in secret or len(secret.encode("utf-8")) > 4096:
+        raise ValueError("SMTP password is invalid")
+    return secret
+
+
+def _configured_mailbox(value: str, key: str) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value.encode("utf-8")) > 254
+        or value.count("@") != 1
+        or not all(value.split("@", 1))
+        or any(
+            character.isspace() or ord(character) < 32 or ord(character) == 127
+            for character in value
+        )
+    ):
+        raise ValueError(f"{key} is invalid")
     return value

@@ -134,6 +134,46 @@ owner/group-writable, executable, or world-accessible pepper files.
 unrestricted signup until email verification, password recovery, abuse
 handling, and the privacy workflow are deployed.
 
+### Email delivery boundary
+
+Email delivery is disabled by default with
+`COMICOLLECT_EMAIL_TRANSPORT=disabled`. Production configuration fails closed
+if public registration is enabled without an email transport. The supplied
+provider-neutral `EmailSender` boundary currently has one SMTP adapter; an
+outbox worker can replace that adapter later without coupling account logic to
+a particular mail provider.
+
+SMTP permits only `starttls` or `implicit_tls`. Both use the platform trust
+store, require TLS 1.2 or newer, validate the server certificate and use a
+bounded timeout. There is no plaintext fallback. Username and password must be
+configured together; an unauthenticated local relay may omit both. Prefer a
+protected password file over an inline environment value:
+
+```bash
+sudo install -o root -g comicollect -m 0440 \
+  /root/secret-staging/comicollect-smtp-password \
+  /etc/comicollect/smtp-password
+```
+
+The file must be absolute, regular, non-symlink, read-only, non-executable and
+not world-accessible. Its UTF-8 contents are exact: a trailing newline is part
+of the password. Never print the password, recipient, message body or action
+URL in logs. Delivery failures expose only stable retry/permanent categories;
+provider diagnostics remain outside public errors.
+
+Account requests must commit their one-time action token and an email outbox
+intent in the same database transaction. Sending must happen asynchronously,
+not inside an API request. The dispatcher renders the raw link only in memory,
+uses a deterministic `Message-ID`, leases work across crashes and treats SMTP
+as at-least-once delivery. A disconnect after the server accepted message data
+must not automatically generate a duplicate retry.
+
+Do not weaken `comicollect-production.service` network isolation for mail. Run
+the future outbox dispatcher in its own hardened unit with reviewed egress, or
+send through a loopback mail relay. SMTP availability is monitored separately
+and does not belong in API readiness. Configure SPF, DKIM and DMARC for the
+sender domain before enabling public mail.
+
 The supplied units intentionally authorize only the documented `/var/lib` and
 `/var/backups` paths. Changing a data or backup path also requires a reviewed
 systemd override for both `ReadWritePaths` and `RequiresMountsFor`; changing the

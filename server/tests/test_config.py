@@ -44,6 +44,25 @@ class ProductionConfigTest(unittest.TestCase):
         self.pepper.write_bytes(value)
         self.pepper.chmod(0o440)
 
+    def smtp_environment(self, **overrides: str) -> dict[str, str]:
+        password = self.root / "smtp-password"
+        if password.exists():
+            password.chmod(0o640)
+        password.write_text("smtp-secret\n", encoding="utf-8")
+        password.chmod(0o440)
+        values = self.environment(
+            COMICOLLECT_EMAIL_TRANSPORT="smtp",
+            COMICOLLECT_SMTP_HOST="smtp.example.test",
+            COMICOLLECT_SMTP_SECURITY="starttls",
+            COMICOLLECT_SMTP_USERNAME="mailer-user",
+            COMICOLLECT_SMTP_PASSWORD_FILE=str(password),
+            COMICOLLECT_SMTP_TIMEOUT_SECONDS="8",
+            COMICOLLECT_EMAIL_FROM_ADDRESS="noreply@example.test",
+            COMICOLLECT_EMAIL_FROM_NAME="Comicollect Accounts",
+        )
+        values.update(overrides)
+        return values
+
     def test_loads_typed_production_configuration(self) -> None:
         config = load_config(self.environment())
 
@@ -56,6 +75,100 @@ class ProductionConfigTest(unittest.TestCase):
         self.assertEqual(config.tenant_storage_limit_bytes, 512 * 1024 * 1024)
         self.assertEqual(config.disk_reserve_bytes, 1024 * 1024 * 1024)
         self.assertEqual(config.backup_reserve_bytes, 1024 * 1024 * 1024)
+        self.assertEqual(config.email_delivery.transport, "disabled")
+
+    def test_loads_tls_only_smtp_configuration_and_protected_secret(self) -> None:
+        config = load_config(
+            self.smtp_environment(COMICOLLECT_PUBLIC_REGISTRATION="true")
+        )
+
+        email = config.email_delivery
+        self.assertTrue(config.registration_enabled)
+        self.assertEqual(email.transport, "smtp")
+        self.assertEqual(email.host, "smtp.example.test")
+        self.assertEqual(email.port, 587)
+        self.assertEqual(email.security, "starttls")
+        self.assertEqual(email.username, "mailer-user")
+        self.assertEqual(email.password, "smtp-secret\n")
+        self.assertEqual(email.timeout_seconds, 8)
+        self.assertEqual(email.from_address, "noreply@example.test")
+        self.assertEqual(email.from_name, "Comicollect Accounts")
+        self.assertNotIn("smtp-secret", repr(email))
+
+    def test_implicit_tls_uses_its_standard_port_by_default(self) -> None:
+        config = load_config(
+            self.smtp_environment(COMICOLLECT_SMTP_SECURITY="implicit_tls")
+        )
+
+        self.assertEqual(config.email_delivery.security, "implicit_tls")
+        self.assertEqual(config.email_delivery.port, 465)
+
+    def test_public_registration_fails_closed_without_email_delivery(self) -> None:
+        with self.assertRaisesRegex(ValueError, "registration requires"):
+            load_config(
+                self.environment(COMICOLLECT_PUBLIC_REGISTRATION="true")
+            )
+
+    def test_smtp_rejects_plaintext_unknown_or_unbounded_configuration(self) -> None:
+        cases = (
+            ({"COMICOLLECT_EMAIL_TRANSPORT": "sendmail"}, "TRANSPORT"),
+            ({"COMICOLLECT_SMTP_SECURITY": "plaintext"}, "SECURITY"),
+            ({"COMICOLLECT_SMTP_PORT": "0"}, "PORT"),
+            ({"COMICOLLECT_SMTP_TIMEOUT_SECONDS": "31"}, "TIMEOUT"),
+            ({"COMICOLLECT_EMAIL_FROM_ADDRESS": "bad address"}, "FROM_ADDRESS"),
+        )
+        for overrides, expected in cases:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(
+                ValueError,
+                expected,
+            ):
+                environment = (
+                    self.environment(**overrides)
+                    if "COMICOLLECT_EMAIL_TRANSPORT" in overrides
+                    else self.smtp_environment(**overrides)
+                )
+                load_config(environment)
+
+    def test_smtp_credentials_must_be_paired_and_unambiguous(self) -> None:
+        password_file = str(self.root / "smtp-password")
+        cases = (
+            {"COMICOLLECT_SMTP_USERNAME": ""},
+            {"COMICOLLECT_SMTP_PASSWORD_FILE": ""},
+            {
+                "COMICOLLECT_SMTP_PASSWORD": "inline-secret",
+                "COMICOLLECT_SMTP_PASSWORD_FILE": password_file,
+            },
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                load_config(self.smtp_environment(**overrides))
+
+    def test_smtp_password_file_must_be_absolute_regular_and_read_only(self) -> None:
+        password = self.root / "smtp-password"
+        environment = self.smtp_environment()
+        password.chmod(0o640)
+        with self.assertRaisesRegex(ValueError, "read-only"):
+            load_config(environment)
+
+        password.chmod(0o440)
+        environment["COMICOLLECT_SMTP_PASSWORD_FILE"] = "relative-secret"
+        with self.assertRaisesRegex(ValueError, "absolute"):
+            load_config(environment)
+
+        target = self.root / "smtp-password-target"
+        target.write_text("secret", encoding="utf-8")
+        target.chmod(0o440)
+        link = self.root / "smtp-password-link"
+        link.symlink_to(target)
+        environment["COMICOLLECT_SMTP_PASSWORD_FILE"] = str(link)
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            load_config(environment)
+
+    def test_disabled_email_transport_rejects_stray_smtp_settings(self) -> None:
+        with self.assertRaisesRegex(ValueError, "require.*smtp"):
+            load_config(
+                self.environment(COMICOLLECT_SMTP_HOST="smtp.example.test")
+            )
 
     def test_production_fails_closed_without_exactly_one_password_pepper(self) -> None:
         environment = self.environment()
