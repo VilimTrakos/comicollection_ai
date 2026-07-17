@@ -12,21 +12,23 @@ and is never an authorization boundary.
 
 ## Runtime modes
 
-Production accounts are the default:
+The supported production runtime is the WSGI application under the bounded
+Gunicorn profile:
 
 ```sh
+cd server
 COMICOLLECT_PASSWORD_PEPPER_FILE=/run/secrets/comicollect-password-pepper \
 COMICOLLECT_DATA_ROOT=/var/lib/comicollect \
-COMICOLLECT_PUBLIC_REGISTRATION=true \
-python3 server/comicollect_server.py
+COMICOLLECT_PUBLIC_REGISTRATION=false \
+gunicorn --config gunicorn.conf.py
 ```
 
 Startup fails when the password pepper is missing, shorter than 32 bytes, or
 when configured scrypt parameters are below the accepted production floor.
-The server binds to `127.0.0.1` by default. Put it behind a maintained TLS
-reverse proxy, enforce an external request rate limit there and forward only
-from trusted infrastructure. The bundled framework-free HTTP adapter is not a
-TLS terminator.
+Gunicorn binds to `127.0.0.1` and must sit behind the supplied maintained TLS
+reverse-proxy profile. The `comicollect_server.py` production path is retained
+only as a loopback development adapter; it rejects public binds and is not a
+supported deployment runtime.
 
 The old single-user LAN deployment remains available only when selected
 explicitly:
@@ -45,13 +47,13 @@ in production mode.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `COMICOLLECT_PASSWORD_PEPPER_FILE` | none | Preferred root-owned secret file, at least 32 bytes |
+| `COMICOLLECT_PASSWORD_PEPPER_FILE` | none | Preferred root-owned, read-only secret file (`0440`), at least 32 bytes |
 | `COMICOLLECT_PASSWORD_PEPPER` | none | Inline alternative; configure exactly one pepper source |
 | `COMICOLLECT_DATA_ROOT` | none | Required absolute parent for account metadata and tenant stores |
 | `COMICOLLECT_AUTH_DB` | `<data>/accounts.sqlite3` | Account/session database |
 | `COMICOLLECT_TENANT_ROOT` | `<data>/accounts` | Per-account Sync v2 databases |
 | `COMICOLLECT_PUBLIC_REGISTRATION` | `false` | Enables public registration explicitly |
-| `COMICOLLECT_HOST` | `127.0.0.1` | Backend bind address |
+| `COMICOLLECT_HOST` | `127.0.0.1` | Loopback bind for the development adapter; Gunicorn is fixed to loopback |
 | `COMICOLLECT_PORT` | `8787` | Backend port |
 | `COMICOLLECT_ACCESS_TTL_SECONDS` | `900` | Access-token lifetime |
 | `COMICOLLECT_REFRESH_TTL_SECONDS` | `2592000` | Rotating refresh-token lifetime |
@@ -89,6 +91,28 @@ limited to 32 KiB, compatibility v1 sync to 1 MiB, and Sync v2 to 8 MiB.
 
 Registration returns HTTP 201. It is unavailable unless public registration
 was enabled explicitly.
+
+For a closed beta, keep public registration disabled and provision the first
+and subsequent invited accounts from an interactive root/operator shell:
+
+```sh
+sudo -u comicollect -- /bin/sh -c '
+  set -a
+  . /etc/comicollect/production.env
+  set +a
+  cd /opt/comicollect/current/server
+  exec ../venv/bin/python \
+    -m comicollect_backend.admin_cli "$@"
+' comicollect-admin create-account \
+  --email collector@example.com --display-name Collector
+```
+
+Prefer running the same command through a root-controlled wrapper which loads
+`/etc/comicollect/production.env`; do not make that environment file
+world-readable. The command accepts no password argument. It prompts twice via
+`getpass`, never prints the password, reuses the production account validation
+and scrypt hasher, and works while public registration is disabled. It prints
+only the new account identifier. The user can then sign in normally.
 
 ### Login
 
@@ -160,8 +184,18 @@ startup fails if the configured secret changes unexpectedly.
 ### Sync
 
 `POST /api/v2/sync` keeps the exact documented Sync v2 request and response
-contract. `POST /api/v1/sync` remains account-scoped for compatibility. Both
-require a production access token; a token can access only its tenant store.
+contract and derives its tenant exclusively from the production access token.
+`POST /api/v1/sync` returns HTTP 410 with `sync_v1_retired` on the production
+account API because its unpaged response cannot be safely bounded. The
+explicit legacy LAN runtime remains compatible with Sync v1 for old clients.
+
+Mutating Sync v2 calls reserve conservative tenant and host capacity before
+entering SQLite. Reservations from concurrent requests are accounted together,
+so two writes cannot spend the same remaining quota. A pull with an empty
+`mutations` array uses a read transaction and is not response-cached; an
+existing account can therefore still download its state after its write quota
+or the host reserve has been reached. The first sync for a new account still
+requires write capacity because it must initialize that tenant database.
 
 ## Errors, health and headers
 
@@ -174,7 +208,8 @@ Expected failures have stable JSON fields:
 Relevant auth codes include `registration_disabled`, `email_in_use`,
 `password_policy_failed`, `invalid_credentials`, `invalid_token`,
 `access_expired`, `invalid_refresh_token`, `refresh_expired`, `refresh_reused`,
-`account_unavailable` and `rate_limited`.
+`account_unavailable`, `rate_limited`, `invalid_request` and
+`sync_v1_retired`.
 
 Every response includes `Cache-Control: no-store`, `X-Content-Type-Options:
 nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and an

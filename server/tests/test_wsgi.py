@@ -7,11 +7,12 @@ import runpy
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from comicollect_backend.production_api import MAX_AUTH_BODY, MAX_V1_SYNC_BODY
 from comicollect_backend.wsgi import WsgiApplication
-from comicollect_wsgi import create_application
+from comicollect_wsgi import check_application, create_application
 
 
 class _RecordingApi:
@@ -219,11 +220,33 @@ class WsgiApplicationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one"):
             create_application({})
 
+    def test_production_check_enforces_database_and_disk_readiness(self) -> None:
+        repository = SimpleNamespace(ping=lambda: True)
+        tenants = SimpleNamespace(ready=lambda: True)
+        application = SimpleNamespace(
+            api=SimpleNamespace(
+                auth=SimpleNamespace(repository=repository),
+                tenants=tenants,
+            )
+        )
+
+        check_application(application)
+
+        application.api.auth.repository = SimpleNamespace(ping=lambda: False)
+        with self.assertRaisesRegex(RuntimeError, "auth database"):
+            check_application(application)
+
+        application.api.auth.repository = repository
+        application.api.tenants = SimpleNamespace(ready=lambda: False)
+        with self.assertRaisesRegex(RuntimeError, "tenant storage"):
+            check_application(application)
+
     def test_factory_builds_the_real_dependency_graph_from_valid_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             pepper = root / "pepper"
             pepper.write_bytes(b"p" * 32)
+            pepper.chmod(0o440)
             application = create_application(
                 {
                     "COMICOLLECT_DATA_ROOT": str(root / "data"),

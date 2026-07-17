@@ -20,6 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Lock
 
+from comicollect_backend.api_errors import PublicApiError
+
 LOG = logging.getLogger("comicollect")
 MAX_BODY = 8 * 1024 * 1024
 MAX_V2_MUTATIONS = 100
@@ -51,11 +53,9 @@ ON CONFLICT(id) DO UPDATE SET {','.join(f'{f}=excluded.{f}' for f in FIELDS[1:])
 WHERE excluded.updated_at > comics.updated_at"""
 
 
-class ApiError(Exception):
+class ApiError(PublicApiError):
     def __init__(self, status: int, code: str, message: str):
-        super().__init__(message)
-        self.status = status
-        self.code = code
+        super().__init__(status, code, message)
 
     def payload(self) -> dict:
         return {"error": str(self), "code": self.code}
@@ -67,6 +67,17 @@ class V1WriteConflict(ApiError):
             HTTPStatus.CONFLICT,
             "v1_read_only",
             "v1 writes are disabled after sync v2 activation",
+        )
+
+
+class SyncValidationError(ApiError):
+    """A malformed sync request with a deliberately generic public message."""
+
+    def __init__(self):
+        super().__init__(
+            HTTPStatus.BAD_REQUEST,
+            "invalid_request",
+            "Sync payload is invalid",
         )
 
 
@@ -249,9 +260,19 @@ class Store:
             )
 
     def sync(self, since: int, changes: list[dict]) -> tuple[int, list[dict]]:
+        if (
+            type(since) is not int
+            or not 0 <= since <= 2**63 - 1
+            or not isinstance(changes, list)
+            or len(changes) > 10_000
+        ):
+            raise SyncValidationError()
         with self.lock, closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
-            clean_changes = [validate_comic(item) for item in changes]
+            try:
+                clean_changes = [validate_comic(item) for item in changes]
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise SyncValidationError() from exc
             v2_active = self._meta(db, "v2_activated") == "1"
             if clean_changes and v2_active:
                 # A client may be retrying a v1 request whose HTTP response
@@ -291,12 +312,20 @@ class Store:
             db.commit()
         return server_time, [dict(row) for row in rows]
 
-    def sync_v2(self, payload: dict) -> dict:
-        request = validate_v2_request(payload)
+    def sync_v2(self, payload: dict, *, cache_response: bool = True) -> dict:
+        try:
+            request = validate_v2_request(payload)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise SyncValidationError() from exc
         supplied_server_id = request.get("server_id", "")
         request_hash = _payload_hash(request)
         with self.lock, closing(self.connect()) as db, db:
-            db.execute("BEGIN IMMEDIATE")
+            transaction = (
+                "BEGIN IMMEDIATE"
+                if request["mutations"] or cache_response
+                else "BEGIN"
+            )
+            db.execute(transaction)
             server_id = self._meta(db, "server_id")
             if supplied_server_id and supplied_server_id != server_id:
                 raise ApiError(
@@ -376,7 +405,13 @@ class Store:
                         }
                     )
                     continue
-                canonical_changes = self._canonicalize_group(db, mutation["changes"])
+                try:
+                    canonical_changes = self._canonicalize_group(
+                        db,
+                        mutation["changes"],
+                    )
+                except (TypeError, ValueError, OverflowError) as exc:
+                    raise SyncValidationError() from exc
                 revision = self._record_group(
                     db,
                     mutation_id,
@@ -457,20 +492,21 @@ class Store:
                 "has_more": has_more,
                 "change_groups": page,
             }
-            response_json = _canonical_json(response)
-            db.execute(
-                "INSERT INTO v2_requests"
-                "(request_id,payload_hash,response_json,created_at,device_id) "
-                "VALUES(?,?,?,?,?)",
-                (
-                    request["request_id"],
-                    request_hash,
-                    response_json,
-                    int(time.time() * 1000),
-                    request["device_id"],
-                ),
-            )
-            self._prune_request_cache(db)
+            if cache_response:
+                response_json = _canonical_json(response)
+                db.execute(
+                    "INSERT INTO v2_requests"
+                    "(request_id,payload_hash,response_json,created_at,device_id) "
+                    "VALUES(?,?,?,?,?)",
+                    (
+                        request["request_id"],
+                        request_hash,
+                        response_json,
+                        int(time.time() * 1000),
+                        request["device_id"],
+                    ),
+                )
+                self._prune_request_cache(db)
             db.commit()
         return response
 
@@ -886,6 +922,10 @@ def validate_comic(raw: dict) -> dict:
     }
     if not comic["id"] or not comic["series"] or comic["number"] < 0:
         raise ValueError("invalid id, series, or number")
+    for field in ("number", "year", "page_count", "updated_at"):
+        value = comic[field]
+        if value is not None and not -(2**63) <= value <= 2**63 - 1:
+            raise ValueError(f"invalid {field}")
     if comic["condition_grade"] not in CONDITION_GRADES:
         raise ValueError("invalid condition_grade")
     return comic
@@ -1600,7 +1640,8 @@ def main() -> None:
         if not 1 <= port <= 65535:
             raise SystemExit("port must be between 1 and 65535")
         LOG.info(
-            "production backend listening on %s:%s; auth_database=%s",
+            "development-only production adapter listening on %s:%s; "
+            "auth_database=%s",
             host,
             port,
             config.auth_database,

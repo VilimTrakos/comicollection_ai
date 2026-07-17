@@ -13,7 +13,7 @@ from comicollect_backend.auth_schema import (
     SUPPORTED_AUTH_SCHEMA_VERSION,
 )
 from comicollect_backend.auth_service import AuthService
-from comicollect_backend.rate_limit import RateLimiter
+from comicollect_backend.rate_limit import RateLimiter, RatePolicy
 
 from tests.support import (
     PASSWORD,
@@ -337,6 +337,29 @@ class AuthServiceTest(unittest.TestCase):
         self.assertLessEqual(access_count, 2)
         self.assertEqual(refresh_count, 2)
 
+    def test_refresh_rate_limit_is_stable_across_token_rotation(self) -> None:
+        current = registration(self.service)
+        self.service.rate_limiter = RateLimiter(
+            clock=self.clock,
+            policies={
+                "refresh-ip": RatePolicy(100, 60_000),
+                "refresh-session": RatePolicy(2, 60_000),
+            },
+        )
+        for index in range(2):
+            current = self.service.refresh(
+                refresh_token=token_from(current, "refresh_token"),
+                installation_id="installation-a",
+                request_id=f"stable-session-{index}",
+            )
+
+        with error_code(self, "rate_limited"):
+            self.service.refresh(
+                refresh_token=token_from(current, "refresh_token"),
+                installation_id="installation-a",
+                request_id="stable-session-limited",
+            )
+
     def test_login_replaces_same_installation_and_caps_active_sessions(self) -> None:
         original = registration(self.service, installation_id="installation-0")
         self.service.rate_limiter = RateLimiter(
@@ -389,6 +412,39 @@ class AuthServiceTest(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "newer auth schema"):
             AuthRepository(database)
+
+    def test_repository_ping_requires_the_existing_current_schema(self) -> None:
+        database = Path(self.temporary.name) / "readiness.sqlite3"
+        repository = AuthRepository(database)
+        self.assertTrue(repository.ping())
+
+        database.unlink()
+        self.assertFalse(repository.ping())
+        self.assertFalse(database.exists())
+
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute(
+                "CREATE TABLE auth_schema_migrations("
+                "version INTEGER PRIMARY KEY,applied_at INTEGER NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO auth_schema_migrations(version,applied_at) "
+                "VALUES(?,0)",
+                (SUPPORTED_AUTH_SCHEMA_VERSION,),
+            )
+        self.assertFalse(repository.ping())
+
+    def test_repository_ping_requires_a_writable_sqlite_path(self) -> None:
+        root = Path(self.temporary.name) / "read-only-parent"
+        database = root / "accounts.sqlite3"
+        repository = AuthRepository(database)
+        self.assertTrue(repository.ping())
+
+        root.chmod(0o500)
+        try:
+            self.assertFalse(repository.ping())
+        finally:
+            root.chmod(0o700)
 
     def test_logout_revokes_access_and_refresh_token(self) -> None:
         tokens = registration(self.service)

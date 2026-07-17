@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import re
@@ -10,6 +11,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Mapping
 
+from .api_errors import PublicApiError
 from .auth_models import AuthError
 from .auth_service import AuthService
 from .tenant_store import TenantStore
@@ -18,12 +20,14 @@ LOG = logging.getLogger("comicollect.production")
 MAX_AUTH_BODY = 32 * 1024
 MAX_V1_SYNC_BODY = 1024 * 1024
 MAX_SYNC_BODY = 8 * 1024 * 1024
-MAX_V1_CHANGES = 10_000
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
-class RequestValidationError(Exception):
+class RequestValidationError(PublicApiError):
     """A deliberately public, non-sensitive request validation failure."""
+
+    def __init__(self, message: str):
+        super().__init__(HTTPStatus.BAD_REQUEST, "invalid_request", message)
 
 
 class ProductionApi:
@@ -59,7 +63,7 @@ class ProductionApi:
             )
             status, value = payload
             return _response(status, value, response_headers)
-        except AuthError as exc:
+        except PublicApiError as exc:
             return _error(
                 exc.status,
                 exc.code,
@@ -67,19 +71,7 @@ class ProductionApi:
                 request_id,
                 {**response_headers, **exc.headers},
             )
-        except RequestValidationError as exc:
-            return _error(
-                HTTPStatus.BAD_REQUEST,
-                "invalid_request",
-                str(exc),
-                request_id,
-                response_headers,
-            )
-        except Exception as exc:  # Store ApiError stays in its compatibility module.
-            status = getattr(exc, "status", None)
-            code = getattr(exc, "code", None)
-            if isinstance(status, int) and isinstance(code, str):
-                return _error(status, code, str(exc), request_id, response_headers)
+        except Exception as exc:
             LOG.error(
                 "request failed; request_id=%s exception=%s",
                 request_id,
@@ -162,21 +154,12 @@ class ProductionApi:
             value = _json_object(body, headers, MAX_SYNC_BODY)
             return HTTPStatus.OK, self.tenants.sync(context.account_id, value)
         if method == "POST" and path == "/api/v1/sync":
-            value = _json_object(body, headers, MAX_V1_SYNC_BODY)
-            _keys(value, {"since", "changes"})
-            since = value["since"]
-            changes = value["changes"]
-            if (
-                type(since) is not int
-                or since < 0
-                or not isinstance(changes, list)
-                or len(changes) > MAX_V1_CHANGES
-            ):
-                raise RequestValidationError("invalid legacy sync payload")
-            server_time, remote = self.tenants.sync_v1(
-                context.account_id, since, changes
+            raise PublicApiError(
+                HTTPStatus.GONE,
+                "sync_v1_retired",
+                "Sync v1 is not available on the production account API; "
+                "update the app",
             )
-            return HTTPStatus.OK, {"server_time": server_time, "changes": remote}
         raise AuthError(HTTPStatus.NOT_FOUND, "not_found", "Route not found")
 
 
@@ -250,10 +233,17 @@ class _ProductionHandler(BaseHTTPRequestHandler):
 
 
 class ProductionHttpServer(ThreadingHTTPServer):
+    """Development-only loopback adapter; production uses bounded Gunicorn."""
+
     daemon_threads = True
     allow_reuse_address = True
 
     def __init__(self, address, api: ProductionApi):
+        if not _is_loopback_host(address[0]):
+            raise ValueError(
+                "the development HTTP adapter may bind only to loopback; "
+                "use the supported Gunicorn/nginx production profile"
+            )
         super().__init__(address, _ProductionHandler)
         self.api = api
 
@@ -271,7 +261,11 @@ def _json_object(
         return {}
     content_type = headers.get("content-type", "").split(";", 1)[0].lower()
     if content_type != "application/json":
-        raise AuthError(415, "unsupported_media_type", "Content-Type must be application/json")
+        raise AuthError(
+            415,
+            "unsupported_media_type",
+            "Content-Type must be application/json",
+        )
     if not body:
         raise RequestValidationError("JSON body is required")
     try:
@@ -282,7 +276,7 @@ def _json_object(
                 RequestValidationError(f"invalid JSON constant {item}")
             ),
         )
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (ValueError, UnicodeDecodeError) as exc:
         raise RequestValidationError("JSON body is invalid") from exc
     if not isinstance(value, dict):
         raise RequestValidationError("JSON body must be an object")
@@ -339,8 +333,16 @@ def _response(
 ) -> tuple[int, dict[str, str], bytes]:
     if value is None:
         return int(status), headers, b""
-    payload = json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode()
-    return int(status), {**headers, "Content-Type": "application/json; charset=utf-8"}, payload
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
+    return (
+        int(status),
+        {**headers, "Content-Type": "application/json; charset=utf-8"},
+        payload,
+    )
 
 
 def _error(
@@ -360,3 +362,13 @@ def _error(
 def _require_empty(body: bytes) -> None:
     if body:
         raise RequestValidationError("request body must be empty")
+
+
+def _is_loopback_host(value: object) -> bool:
+    host = str(value).strip().lower()
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False

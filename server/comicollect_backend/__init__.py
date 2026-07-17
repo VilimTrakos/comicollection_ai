@@ -1,5 +1,6 @@
 """Production account and tenant boundaries for the Comicollect server."""
 
+from .api_errors import PublicApiError
 from .auth_models import AuthContext, AuthError
 from .auth_repository import AuthRepository
 from .auth_service import AuthService
@@ -16,6 +17,7 @@ __all__ = [
     "AuthService",
     "OpaqueTokenCodec",
     "PasswordHasher",
+    "PublicApiError",
     "ProductionApi",
     "ProductionConfig",
     "ProductionHttpServer",

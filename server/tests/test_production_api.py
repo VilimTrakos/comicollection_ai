@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock
 
-from comicollect_backend.production_api import MAX_V1_CHANGES, ProductionApi
+from comicollect_backend.production_api import ProductionApi, ProductionHttpServer
 from comicollect_backend.rate_limit import RateLimiter
 from comicollect_backend.tenant_store import TenantStore
 
@@ -190,6 +190,23 @@ class ProductionApiTest(unittest.TestCase):
         self.assertEqual(payload["code"], "invalid_request")
         self.assertIn("duplicate JSON field", payload["error"])
 
+    def test_oversized_json_integer_is_a_safe_validation_error(self) -> None:
+        registered = self.register()
+        response = self.api.handle(
+            "POST",
+            "/api/v2/sync",
+            {
+                **bearer(token_from(registered, "access_token")),
+                "content-type": "application/json",
+            },
+            b'{"cursor":' + (b"9" * 5000) + b"}",
+        )
+
+        status, _, payload = decode_http_response(response)
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["code"], "invalid_request")
+        self.assertEqual(payload["error"], "JSON body is invalid")
+
     def test_sync_account_is_derived_only_from_bearer_token(self) -> None:
         account_a = self.register("a@example.com")
         account_b = self.register("b@example.com")
@@ -212,7 +229,7 @@ class ProductionApiTest(unittest.TestCase):
         self.assertEqual(response_a["acknowledgements"][0]["revision"], 1)
         self.assertEqual(response_b["acknowledgements"][0]["revision"], 1)
 
-    def test_legacy_sync_rejects_too_many_changes_before_tenant_store(self) -> None:
+    def test_production_api_retires_v1_without_calling_tenant_store(self) -> None:
         registered = self.register()
         sync_v1 = Mock(return_value=(0, []))
         self.api.tenants.sync_v1 = sync_v1
@@ -220,17 +237,35 @@ class ProductionApiTest(unittest.TestCase):
         status, _, payload = self.request(
             "POST",
             "/api/v1/sync",
-            {"since": 0, "changes": [{}] * (MAX_V1_CHANGES + 1)},
+            {"since": 0, "changes": [{}]},
+            bearer(token_from(registered, "access_token")),
+        )
+
+        self.assertEqual(status, 410)
+        self.assertEqual(payload["code"], "sync_v1_retired")
+        sync_v1.assert_not_called()
+
+    def test_malformed_v2_sync_has_a_safe_public_validation_error(self) -> None:
+        registered = self.register()
+
+        status, _, payload = self.request(
+            "POST",
+            "/api/v2/sync",
+            {},
             bearer(token_from(registered, "access_token")),
         )
 
         self.assertEqual(status, 400)
         self.assertEqual(payload["code"], "invalid_request")
-        sync_v1.assert_not_called()
+        self.assertEqual(payload["error"], "Sync payload is invalid")
 
     def test_unexpected_errors_never_log_or_return_exception_secrets(self) -> None:
+        class InternalFailure(ValueError):
+            status = 418
+            code = "looks_public_but_is_not"
+
         registered = self.register()
-        self.api.tenants.sync = Mock(side_effect=ValueError("super-secret"))
+        self.api.tenants.sync = Mock(side_effect=InternalFailure("super-secret"))
 
         with self.assertLogs("comicollect.production", level="ERROR") as captured:
             status, _, payload = self.request(
@@ -245,7 +280,7 @@ class ProductionApiTest(unittest.TestCase):
         self.assertEqual(payload["code"], "internal_error")
         self.assertNotIn("super-secret", logs)
         self.assertNotIn("super-secret", json.dumps(payload))
-        self.assertIn("ValueError", logs)
+        self.assertIn("InternalFailure", logs)
 
     def test_protected_routes_reject_missing_or_invalid_bearer(self) -> None:
         for headers in ({}, bearer("not-a-token")):
@@ -332,6 +367,10 @@ class ProductionApiTest(unittest.TestCase):
         status, _, payload = decode_http_response(response)
         self.assertEqual(status, 413)
         self.assertEqual(payload["code"], "request_too_large")
+
+    def test_development_http_adapter_rejects_public_bind(self) -> None:
+        with self.assertRaisesRegex(ValueError, "loopback"):
+            ProductionHttpServer(("0.0.0.0", 0), self.api)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ import unicodedata
 from http import HTTPStatus
 from typing import Callable
 
-from .auth_models import AuthContext, AuthError, TokenPair
+from .auth_models import Account, AuthContext, AuthError, TokenPair
 from .auth_repository import AuthRepository, DuplicateEmailError
 from .passwords import PasswordHasher
 from .rate_limit import RateLimiter, RatePolicy
@@ -70,33 +70,28 @@ class AuthService:
                 "Public registration is disabled",
             )
         self.rate_limiter.consume("register", rate_key)
-        normalized_email = _email(email)
-        normalized_name = _display_name(display_name)
         installation = _installation_id(installation_id)
-        try:
-            encoded = self.hasher.hash(password)
-        except (TypeError, ValueError) as exc:
-            raise AuthError(
-                HTTPStatus.BAD_REQUEST,
-                "password_policy_failed",
-                "Password must contain between 12 and 128 characters",
-            ) from exc
         now = self.clock()
-        try:
-            account = self.repository.create_account(
-                email=normalized_email,
-                display_name=normalized_name,
-                password_hash=encoded,
-                now=now,
-            )
-        except DuplicateEmailError as exc:
-            raise AuthError(
-                HTTPStatus.CONFLICT,
-                "email_in_use",
-                "An account already exists for this email",
-            ) from exc
+        account = self._create_account(email, password, display_name, now)
         pair = self._new_session(account.id, installation, now)
         return {"account": account.public_json(), **pair.json()}
+
+    def provision_account(
+        self,
+        *,
+        email: str,
+        password: str,
+        display_name: str,
+    ) -> dict:
+        """Create an operator-provisioned account without opening registration."""
+
+        account = self._create_account(
+            email,
+            password,
+            display_name,
+            self.clock(),
+        )
+        return account.public_json()
 
     def login(
         self,
@@ -111,7 +106,10 @@ class AuthService:
             normalized_email = _email(email)
             installation = _installation_id(installation_id)
         except AuthError:
-            self.hasher.verify(password if isinstance(password, str) else "", self._dummy_hash)
+            self.hasher.verify(
+                password if isinstance(password, str) else "",
+                self._dummy_hash,
+            )
             raise _invalid_credentials()
         self.rate_limiter.consume("login-account", normalized_email)
         stored = self.repository.account_with_password(normalized_email)
@@ -122,7 +120,11 @@ class AuthService:
         account = stored[0]
         now = self.clock()
         if self.hasher.needs_rehash(encoded):
-            self.repository.update_password_hash(account.id, self.hasher.hash(password), now)
+            self.repository.update_password_hash(
+                account.id,
+                self.hasher.hash(password),
+                now,
+            )
         pair = self._new_session(account.id, installation, now)
         return {"account": account.public_json(), **pair.json()}
 
@@ -145,7 +147,8 @@ class AuthService:
                 "invalid_refresh_token",
                 "Refresh token is invalid",
             ) from exc
-        self.rate_limiter.consume("refresh-session", old_digest.hex())
+        session_key = self.repository.refresh_rate_limit_key(old_digest)
+        self.rate_limiter.consume("refresh-session", session_key)
         now = self.clock()
         access_token = self.tokens.create("cca_")
         next_refresh_token = self.tokens.create("ccr_")
@@ -227,7 +230,12 @@ class AuthService:
     def me(self, access_token: str) -> dict:
         return self.authenticate_access(access_token).account.public_json()
 
-    def _new_session(self, account_id: str, installation_id: str, now: int) -> TokenPair:
+    def _new_session(
+        self,
+        account_id: str,
+        installation_id: str,
+        now: int,
+    ) -> TokenPair:
         access_token = self.tokens.create("cca_")
         refresh_token = self.tokens.create("ccr_")
         access_expires = now + self.access_ttl_ms
@@ -250,6 +258,37 @@ class AuthService:
             refresh_token.raw,
             refresh_expires,
         )
+
+    def _create_account(
+        self,
+        email: str,
+        password: str,
+        display_name: str,
+        now: int,
+    ) -> Account:
+        normalized_email = _email(email)
+        normalized_name = _display_name(display_name)
+        try:
+            encoded = self.hasher.hash(password)
+        except (TypeError, ValueError) as exc:
+            raise AuthError(
+                HTTPStatus.BAD_REQUEST,
+                "password_policy_failed",
+                "Password must contain between 12 and 128 characters",
+            ) from exc
+        try:
+            return self.repository.create_account(
+                email=normalized_email,
+                display_name=normalized_name,
+                password_hash=encoded,
+                now=now,
+            )
+        except DuplicateEmailError as exc:
+            raise AuthError(
+                HTTPStatus.CONFLICT,
+                "email_in_use",
+                "An account already exists for this email",
+            ) from exc
 
 
 def _email(raw: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import sqlite3
+import stat
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -11,12 +12,65 @@ from threading import RLock
 
 from .auth_models import AccessRecord, Account, AuthContext, RefreshRecord
 from .auth_schema import (
+    SUPPORTED_AUTH_SCHEMA_VERSION,
     initialize_auth_schema,
     prepare_new_session,
     prune_expired_tokens,
     prune_session_token_family,
     prune_stale_sessions,
 )
+
+
+_REQUIRED_AUTH_SCHEMA: dict[str, frozenset[str]] = {
+    "auth_schema_migrations": frozenset({"version", "applied_at"}),
+    "auth_meta": frozenset({"key", "value"}),
+    "accounts": frozenset(
+        {
+            "id",
+            "email",
+            "display_name",
+            "password_hash",
+            "status",
+            "email_verified_at",
+            "created_at",
+            "updated_at",
+        }
+    ),
+    "auth_sessions": frozenset(
+        {
+            "id",
+            "account_id",
+            "installation_id",
+            "created_at",
+            "last_seen_at",
+            "absolute_expires_at",
+            "revoked_at",
+            "revoke_reason",
+        }
+    ),
+    "auth_access_tokens": frozenset(
+        {
+            "token_digest",
+            "token_nonce",
+            "session_id",
+            "created_at",
+            "expires_at",
+        }
+    ),
+    "auth_refresh_tokens": frozenset(
+        {
+            "token_digest",
+            "token_nonce",
+            "session_id",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+            "refresh_request_id",
+            "replacement_digest",
+            "replacement_access_digest",
+        }
+    ),
+}
 
 
 class DuplicateEmailError(Exception):
@@ -182,6 +236,18 @@ class AuthRepository:
         return AccessRecord(
             "active", AuthContext(_account(row), str(row["session_id"]))
         )
+
+    def refresh_rate_limit_key(self, digest: bytes) -> str:
+        """Return a stable session identity without exposing it on the wire."""
+
+        with closing(self.connect()) as db:
+            row = db.execute(
+                "SELECT session_id FROM auth_refresh_tokens WHERE token_digest=?",
+                (digest,),
+            ).fetchone()
+        if row is None:
+            return "unknown:" + digest.hex()
+        return "session:" + str(row["session_id"])
 
     def rotate_refresh(
         self,
@@ -349,8 +415,49 @@ class AuthRepository:
                 )
 
     def ping(self) -> bool:
-        with closing(self.connect()) as db:
-            return db.execute("SELECT 1").fetchone()[0] == 1
+        try:
+            metadata = self.path.lstat()
+            if self.path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+                return False
+            uri = self.path.absolute().as_uri() + "?mode=rw"
+            with closing(
+                sqlite3.connect(uri, uri=True, timeout=15)
+            ) as database:
+                database.execute("PRAGMA busy_timeout=15000")
+                required_tables = set(_REQUIRED_AUTH_SCHEMA)
+                placeholders = ",".join("?" for _ in required_tables)
+                actual_tables = {
+                    str(row[0])
+                    for row in database.execute(
+                        "SELECT name FROM sqlite_schema WHERE type='table' "
+                        f"AND name IN ({placeholders})",
+                        tuple(required_tables),
+                    )
+                }
+                if actual_tables != required_tables:
+                    return False
+                version = database.execute(
+                    "SELECT COALESCE(MAX(version),0) "
+                    "FROM auth_schema_migrations"
+                ).fetchone()[0]
+                if int(version) != SUPPORTED_AUTH_SCHEMA_VERSION:
+                    return False
+                for table, required_columns in _REQUIRED_AUTH_SCHEMA.items():
+                    columns = {
+                        str(row[1])
+                        for row in database.execute(f"PRAGMA table_info({table})")
+                    }
+                    if not required_columns.issubset(columns):
+                        return False
+                # Readiness must prove that the live process can acquire the
+                # SQLite write path (including WAL/shm creation), not merely
+                # read an old file. BEGIN IMMEDIATE changes no application
+                # data and the explicit rollback leaves no durable mutation.
+                database.execute("BEGIN IMMEDIATE")
+                database.rollback()
+                return True
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return False
 
 
 def _insert_tokens(

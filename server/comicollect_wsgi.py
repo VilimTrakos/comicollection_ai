@@ -45,6 +45,15 @@ def create_application(
     )
 
 
+def check_application(application: WsgiApplication) -> None:
+    """Run the same storage checks exposed by the readiness endpoint."""
+
+    if not application.api.auth.repository.ping():
+        raise RuntimeError("auth database readiness check failed")
+    if not application.api.tenants.ready():
+        raise RuntimeError("tenant storage readiness check failed")
+
+
 def _trusted_proxies(values: Mapping[str, str]) -> tuple[str, ...]:
     raw = values.get(
         "COMICOLLECT_TRUSTED_PROXY_ADDRESSES",
@@ -63,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if not args.check:
         parser.error("use Gunicorn to serve this module; only --check is supported")
-    create_application()
+    check_application(create_application())
     print("Comicollect production configuration and storage are ready.")
     return 0
 

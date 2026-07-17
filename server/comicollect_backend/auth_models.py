@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .api_errors import PublicApiError
 
-class AuthError(Exception):
+
+class AuthError(PublicApiError):
     """Expected authentication failure with a stable API code."""
 
     def __init__(
@@ -16,10 +18,7 @@ class AuthError(Exception):
         *,
         headers: dict[str, str] | None = None,
     ):
-        super().__init__(message)
-        self.status = status
-        self.code = code
-        self.headers = dict(headers or {})
+        super().__init__(status, code, message, headers=headers)
 
 
 @dataclass(frozen=True)

@@ -920,8 +920,10 @@ class V2StoreTest(unittest.TestCase):
             ],
         )
 
-        with self.assertRaisesRegex(ValueError, "cannot move"):
+        with self.assertRaises(ApiError) as raised:
             self.store.sync_v2(moving)
+        self.assertEqual(raised.exception.code, "invalid_request")
+        self.assertEqual(str(raised.exception), "Sync payload is invalid")
 
         with closing(self.store.connect()) as db, db:
             row = db.execute(
@@ -1013,8 +1015,10 @@ class V2StoreTest(unittest.TestCase):
             ]
         )
 
-        with self.assertRaisesRegex(ValueError, "unknown issue_id"):
+        with self.assertRaises(ApiError) as raised:
             self.store.sync_v2(request)
+        self.assertEqual(raised.exception.code, "invalid_request")
+        self.assertEqual(str(raised.exception), "Sync payload is invalid")
 
         with closing(self.store.connect()) as db, db:
             self.assertEqual(
@@ -1514,7 +1518,7 @@ class ApiTest(unittest.TestCase):
             headers=self.auth(),
         )
         self.assertEqual(status, 400)
-        self.assertIn("cursor", payload["error"])
+        self.assertEqual(payload["error"], "Sync payload is invalid")
         self.assertEqual(payload["code"], "invalid_request")
 
         status, _, first = self.request(
@@ -1605,6 +1609,17 @@ class ApiTest(unittest.TestCase):
             },
             {
                 "payload": {"since": 0, "changes": [{"id": "missing"}]},
+                "headers": self.auth(),
+            },
+            {
+                "payload": {"since": 2**100, "changes": []},
+                "headers": self.auth(),
+            },
+            {
+                "payload": {
+                    "since": 0,
+                    "changes": [comic(number=2**100)],
+                },
                 "headers": self.auth(),
             },
         ]

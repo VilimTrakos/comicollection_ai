@@ -16,6 +16,7 @@ MAX_REFRESH_TTL_SECONDS = 90 * 24 * 60 * 60
 MAX_SESSION_TTL_SECONDS = 365 * 24 * 60 * 60
 MAX_TENANT_STORAGE_BYTES = 10 * 1024 * 1024 * 1024
 MAX_DISK_RESERVE_BYTES = 100 * 1024 * 1024 * 1024
+MAX_BACKUP_RESERVE_BYTES = 100 * 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ProductionConfig:
     session_ttl_ms: int
     tenant_storage_limit_bytes: int
     disk_reserve_bytes: int
+    backup_reserve_bytes: int
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> "ProductionConfig":
@@ -109,6 +111,12 @@ def load_config(env: Mapping[str, str] | None = None) -> ProductionConfig:
             1024 * 1024 * 1024,
             MAX_DISK_RESERVE_BYTES,
         ),
+        backup_reserve_bytes=_bounded_bytes(
+            values,
+            "COMICOLLECT_BACKUP_RESERVE_BYTES",
+            1024 * 1024 * 1024,
+            MAX_BACKUP_RESERVE_BYTES,
+        ),
     )
 
 
@@ -132,10 +140,24 @@ def _secret(values: Mapping[str, str]) -> bytes:
             "COMICOLLECT_PASSWORD_PEPPER_FILE",
         )
         metadata = secret_path.stat()
-        if not stat.S_ISREG(metadata.st_mode):
+        if secret_path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
             raise ValueError("password pepper must be a regular file")
-        if metadata.st_mode & 0o022:
-            raise ValueError("password pepper file must not be group/world writable")
+        # The long-lived service may only read this root-controlled secret.
+        # Owner-writable files are rejected too, otherwise a custom path owned
+        # by the service account would let a compromised process replace the
+        # pepper and permanently break password verification.
+        forbidden = (
+            stat.S_IWUSR
+            | stat.S_IXUSR
+            | stat.S_IWGRP
+            | stat.S_IXGRP
+            | stat.S_IRWXO
+        )
+        if metadata.st_mode & forbidden:
+            raise ValueError(
+                "password pepper file must be read-only, non-executable, and "
+                "not world accessible"
+            )
         secret = secret_path.read_bytes()
     if len(secret) < 32:
         raise ValueError("password pepper must contain at least 32 bytes")

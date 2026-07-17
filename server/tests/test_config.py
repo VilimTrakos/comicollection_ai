@@ -26,6 +26,7 @@ class ProductionConfigTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.pepper = self.root / "password-pepper"
         self.pepper.write_bytes(b"p" * 32)
+        self.pepper.chmod(0o440)
 
     def environment(self, **overrides: str) -> dict[str, str]:
         values = {
@@ -38,6 +39,11 @@ class ProductionConfigTest(unittest.TestCase):
         values.update(overrides)
         return values
 
+    def write_pepper(self, value: bytes) -> None:
+        self.pepper.chmod(0o640)
+        self.pepper.write_bytes(value)
+        self.pepper.chmod(0o440)
+
     def test_loads_typed_production_configuration(self) -> None:
         config = load_config(self.environment())
 
@@ -49,6 +55,7 @@ class ProductionConfigTest(unittest.TestCase):
         self.assertFalse(config.registration_enabled)
         self.assertEqual(config.tenant_storage_limit_bytes, 512 * 1024 * 1024)
         self.assertEqual(config.disk_reserve_bytes, 1024 * 1024 * 1024)
+        self.assertEqual(config.backup_reserve_bytes, 1024 * 1024 * 1024)
 
     def test_production_fails_closed_without_exactly_one_password_pepper(self) -> None:
         environment = self.environment()
@@ -90,11 +97,11 @@ class ProductionConfigTest(unittest.TestCase):
             )
 
     def test_secret_file_and_scrypt_cost_must_meet_production_minimum(self) -> None:
-        self.pepper.write_bytes(b"short")
+        self.write_pepper(b"short")
         with self.assertRaisesRegex(ValueError, "at least 32"):
             load_config(self.environment())
 
-        self.pepper.write_bytes(b"p" * 32)
+        self.write_pepper(b"p" * 32)
         with self.assertRaisesRegex(ValueError, "production minimum"):
             load_config(
                 self.environment(
@@ -104,16 +111,35 @@ class ProductionConfigTest(unittest.TestCase):
                 )
             )
 
-    def test_pepper_file_must_not_be_group_or_world_writable(self) -> None:
-        self.pepper.chmod(0o666)
+    def test_pepper_permissions_allow_reads_but_reject_unsafe_access(self) -> None:
+        for mode in (0o400, 0o440):
+            with self.subTest(allowed=oct(mode)):
+                self.pepper.chmod(mode)
+                self.assertEqual(load_config(self.environment()).password_pepper, b"p" * 32)
 
-        with self.assertRaisesRegex(ValueError, "must not be group/world writable"):
-            load_config(self.environment())
+        for mode in (0o600, 0o640, 0o644, 0o660, 0o740, 0o650):
+            with self.subTest(rejected=oct(mode)):
+                self.pepper.chmod(mode)
+                with self.assertRaisesRegex(ValueError, "read-only"):
+                    load_config(self.environment())
+
+    def test_pepper_path_must_not_be_a_symbolic_link(self) -> None:
+        target = self.root / "pepper-target"
+        target.write_bytes(b"p" * 32)
+        target.chmod(0o440)
+        link = self.root / "pepper-link"
+        link.symlink_to(target)
+
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            load_config(
+                self.environment(COMICOLLECT_PASSWORD_PEPPER_FILE=str(link))
+            )
 
     def test_storage_limits_must_be_positive_and_bounded(self) -> None:
         for key, value in (
             ("COMICOLLECT_TENANT_STORAGE_LIMIT_BYTES", "0"),
             ("COMICOLLECT_DISK_RESERVE_BYTES", str(101 * 1024**3)),
+            ("COMICOLLECT_BACKUP_RESERVE_BYTES", str(101 * 1024**3)),
         ):
             with self.subTest(key=key):
                 with self.assertRaisesRegex(ValueError, "bytes"):
@@ -121,7 +147,7 @@ class ProductionConfigTest(unittest.TestCase):
 
     def test_binary_pepper_bytes_are_not_trimmed(self) -> None:
         pepper = b"\n" + (b"p" * 32) + b"\t"
-        self.pepper.write_bytes(pepper)
+        self.write_pepper(pepper)
 
         self.assertEqual(load_config(self.environment()).password_pepper, pepper)
 
