@@ -1,39 +1,64 @@
 import 'package:flutter/material.dart';
 
 import '../../app_controller.dart';
+import '../../models/auth_failure.dart';
+import '../../services/auth/auth_session_controller.dart';
 import '../../ui/app_theme.dart';
 import '../../ui/common_widgets.dart';
 import '../shell/app_shell.dart';
 
 class LoginGate extends StatefulWidget {
-  const LoginGate({super.key, required this.controller});
-  final AppController controller;
+  const LoginGate({
+    super.key,
+    this.authController,
+    this.onGuest,
+    this.controller,
+  });
+  final AuthSessionController? authController;
+  final VoidCallback? onGuest;
+  final AppController? controller;
   @override
   State<LoginGate> createState() => _LoginGateState();
 }
 
 class _LoginGateState extends State<LoginGate> {
-  final email = TextEditingController(text: 'demo@comicollect.local');
-  final password = TextEditingController(text: 'demo');
-  bool entered = false;
+  final email = TextEditingController();
+  final password = TextEditingController();
+  final displayName = TextEditingController();
+  final confirmation = TextEditingController();
+  bool previewGuest = false;
+  bool registering = false;
   int step = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.authController?.addListener(_authChanged);
+  }
+
+  void _authChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void dispose() {
     email.dispose();
     password.dispose();
+    displayName.dispose();
+    confirmation.dispose();
+    widget.authController?.removeListener(_authChanged);
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (entered) {
+    if (previewGuest && widget.controller != null) {
       return Shell(
-        controller: widget.controller,
-        accountEmail: email.text.trim(),
+        controller: widget.controller!,
+        accountEmail: '',
         onLogout: () => setState(() {
-          entered = false;
-          step = 2;
+          previewGuest = false;
+          step = 0;
         }),
       );
     }
@@ -50,7 +75,7 @@ class _LoginGateState extends State<LoginGate> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'PRIJAVA',
+                    registering ? 'NOVI RAČUN' : 'PRIJAVA',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.primary,
@@ -66,9 +91,25 @@ class _LoginGateState extends State<LoginGate> {
                     style: TextStyle(color: tan),
                   ),
                   const SizedBox(height: 38),
+                  if (registering) ...[
+                    TextField(
+                      key: const ValueKey('auth-display-name'),
+                      controller: displayName,
+                      textInputAction: TextInputAction.next,
+                      autofillHints: const [AutofillHints.name],
+                      decoration: const InputDecoration(
+                        labelText: 'Ime',
+                        prefixIcon: Icon(Icons.person_outline),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
                   TextField(
+                    key: const ValueKey('auth-email'),
                     controller: email,
                     keyboardType: TextInputType.emailAddress,
+                    textInputAction: TextInputAction.next,
+                    autofillHints: const [AutofillHints.email],
                     decoration: const InputDecoration(
                       labelText: 'E-mail',
                       prefixIcon: Icon(Icons.mail_outline),
@@ -76,43 +117,83 @@ class _LoginGateState extends State<LoginGate> {
                   ),
                   const SizedBox(height: 12),
                   TextField(
+                    key: const ValueKey('auth-password'),
                     controller: password,
                     obscureText: true,
+                    enableSuggestions: false,
+                    autocorrect: false,
+                    textInputAction: registering
+                        ? TextInputAction.next
+                        : TextInputAction.done,
+                    autofillHints: [
+                      registering
+                          ? AutofillHints.newPassword
+                          : AutofillHints.password,
+                    ],
+                    onSubmitted: registering ? null : (_) => _submit(),
                     decoration: const InputDecoration(
                       labelText: 'Lozinka',
                       prefixIcon: Icon(Icons.lock_outline),
                     ),
                   ),
+                  if (registering) ...[
+                    const SizedBox(height: 12),
+                    TextField(
+                      key: const ValueKey('auth-password-confirmation'),
+                      controller: confirmation,
+                      obscureText: true,
+                      enableSuggestions: false,
+                      autocorrect: false,
+                      textInputAction: TextInputAction.done,
+                      autofillHints: const [AutofillHints.newPassword],
+                      onSubmitted: (_) => _submit(),
+                      decoration: const InputDecoration(
+                        labelText: 'Ponovi lozinku',
+                        prefixIcon: Icon(Icons.lock_outline),
+                      ),
+                    ),
+                  ],
+                  if (_errorMessage case final message?) ...[
+                    const SizedBox(height: 12),
+                    Text(
+                      message,
+                      key: const ValueKey('auth-error'),
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 18),
                   FilledButton(
-                    onPressed: () => setState(() => entered = true),
-                    child: const Padding(
-                      padding: EdgeInsets.all(15),
+                    onPressed: _busy ? null : _submit,
+                    child: Padding(
+                      padding: const EdgeInsets.all(15),
                       child: Text(
-                        'PRIJAVI SE',
-                        style: TextStyle(fontWeight: FontWeight.w900),
+                        _busy
+                            ? 'PRIČEKAJTE…'
+                            : registering
+                            ? 'NAPRAVI NOVI RAČUN'
+                            : 'PRIJAVI SE',
+                        style: const TextStyle(fontWeight: FontWeight.w900),
                       ),
                     ),
                   ),
                   const SizedBox(height: 12),
                   OutlinedButton(
-                    onPressed: () => setState(() => entered = true),
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() => registering = !registering),
                     child: Padding(
                       padding: const EdgeInsets.all(13),
                       child: Text(
-                        'NAPRAVI NOVI RAČUN',
+                        registering ? 'VEĆ IMAM RAČUN' : 'NAPRAVI NOVI RAČUN',
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.primary,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 20),
-                  const Text(
-                    'Demo prijava je lokalna i prihvaća unesene podatke. Server nije potreban.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Colors.grey, fontSize: 12),
                   ),
                 ],
               ),
@@ -121,6 +202,55 @@ class _LoginGateState extends State<LoginGate> {
         ),
       ),
     );
+  }
+
+  bool get _busy => widget.authController?.busy ?? false;
+
+  String? get _errorMessage {
+    final state = widget.authController?.state;
+    if (state is! AuthSignedOut) return null;
+    if (state.sessionExpired) return 'Sesija je istekla. Prijavite se ponovno.';
+    final failure = state.failure;
+    if (failure == null) return null;
+    return switch (failure.kind) {
+      AuthFailureKind.credentials =>
+        registering
+            ? 'Provjerite podatke. Lozinka mora imati najmanje 12 znakova.'
+            : 'E-mail ili lozinka nisu ispravni.',
+      AuthFailureKind.emailInUse => 'Račun s ovim e-mailom već postoji.',
+      AuthFailureKind.passwordPolicy =>
+        'Lozinka ne zadovoljava sigurnosne zahtjeve.',
+      AuthFailureKind.registrationDisabled =>
+        'Otvaranje novih računa trenutačno nije dostupno.',
+      AuthFailureKind.rateLimited =>
+        'Previše pokušaja. Pričekajte pa pokušajte ponovno.',
+      AuthFailureKind.network => 'Nema mrežne veze. Pokušajte ponovno.',
+      _ => 'Prijava trenutačno nije dostupna. Pokušajte ponovno.',
+    };
+  }
+
+  Future<void> _submit() async {
+    final auth = widget.authController;
+    if (auth == null) return;
+    if (registering) {
+      if (password.text != confirmation.text) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Lozinke se ne podudaraju.')),
+        );
+        return;
+      }
+      await auth.register(email.text, password.text, displayName.text);
+    } else {
+      await auth.login(email.text, password.text);
+    }
+  }
+
+  void _continueAsGuest() {
+    if (widget.onGuest case final callback?) {
+      callback();
+    } else if (widget.controller != null) {
+      setState(() => previewGuest = true);
+    }
   }
 
   Widget _welcome() => Scaffold(
@@ -180,7 +310,7 @@ class _LoginGateState extends State<LoginGate> {
                 ),
                 const SizedBox(height: 10),
                 TextButton(
-                  onPressed: () => setState(() => entered = true),
+                  onPressed: _continueAsGuest,
                   child: const Text(
                     'Nastavi kao gost',
                     style: TextStyle(color: Colors.white),

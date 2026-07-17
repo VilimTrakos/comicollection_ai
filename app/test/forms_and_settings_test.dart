@@ -1,5 +1,6 @@
 import 'package:comicollect/comicollect.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -8,7 +9,10 @@ import 'test_support.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('manual form validates required series and number', (
     tester,
@@ -292,7 +296,7 @@ void main() {
           Scaffold(
             body: SettingsPage(
               controller: controller,
-              accountEmail: 'test@example.com',
+              accountEmail: '',
               onLogout: () {},
             ),
           ),
@@ -334,7 +338,13 @@ void main() {
       await tester.pump();
       final prefs = await SharedPreferences.getInstance();
       expect(prefs.getString('server_url'), 'https://server.test/');
-      expect(prefs.getString('api_token'), 'secret');
+      expect(prefs.containsKey('api_token'), isFalse);
+      expect(
+        await const FlutterSecureStorage().read(
+          key: SecureApiTokenStore.secureStorageKey,
+        ),
+        'secret',
+      );
       expect(controller.lastSyncForced, isTrue);
     },
   );
@@ -350,7 +360,7 @@ void main() {
         Scaffold(
           body: SettingsPage(
             controller: controller,
-            accountEmail: 'collector@example.test',
+            accountEmail: '',
             onLogout: () {},
           ),
         ),
@@ -381,9 +391,78 @@ void main() {
 
     final preferences = await SharedPreferences.getInstance();
     expect(preferences.getString('server_url'), 'https://new.test');
-    expect(preferences.getString('api_token'), 'new-secret');
+    expect(preferences.containsKey('api_token'), isFalse);
+    expect(
+      await const FlutterSecureStorage().read(
+        key: SecureApiTokenStore.secureStorageKey,
+      ),
+      'new-secret',
+    );
     expect(controller.syncResetCalls, 1);
     expect(controller.lastSyncForced, isTrue);
+  });
+
+  testWidgets('account settings can safely repair production sync state', (
+    tester,
+  ) async {
+    final controller = RecordingController();
+    addTearDown(controller.dispose);
+    await _setPhoneSize(tester);
+    await tester.pumpWidget(
+      _app(
+        Scaffold(
+          body: SettingsPage(
+            controller: controller,
+            accountEmail: 'collector@example.test',
+            onLogout: () {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await _scrollTo(tester, find.text('Popravi sinkronizaciju'));
+
+    await tester.tap(find.text('Popravi sinkronizaciju'));
+    await tester.pump();
+    expect(find.text('Popraviti sinkronizaciju?'), findsOneWidget);
+    await tester.tap(find.text('ODUSTANI'));
+    await tester.pumpAndSettle();
+    expect(controller.syncResetCalls, 0);
+
+    await tester.tap(find.text('Popravi sinkronizaciju'));
+    await tester.pump();
+    await tester.tap(find.text('POPRAVI'));
+    await tester.pumpAndSettle();
+
+    expect(controller.syncResetCalls, 1);
+    expect(controller.lastSyncForced, isTrue);
+  });
+
+  testWidgets('guest sync settings sanitize secure-storage failures', (
+    tester,
+  ) async {
+    final controller = RecordingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: LegacySyncSettingsPanel(
+            controller: controller,
+            repository: SyncSettingsRepository(
+              apiTokenStore: _FailingApiTokenStore(),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Lokalni sync server'));
+    await tester.pump();
+
+    expect(
+      find.text('Postavke sinkronizacije trenutačno nisu dostupne.'),
+      findsOneWidget,
+    );
   });
 
   testWidgets('settings logout requires confirmation', (tester) async {
@@ -417,6 +496,14 @@ void main() {
     await tester.pump();
     expect(loggedOut, isTrue);
   });
+}
+
+final class _FailingApiTokenStore implements ApiTokenStore {
+  @override
+  Future<String> read() => throw Exception('secure storage unavailable');
+
+  @override
+  Future<void> write(String token) async {}
 }
 
 Finder _field(String label) => find.widgetWithText(TextField, label);

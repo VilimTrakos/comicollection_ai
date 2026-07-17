@@ -1,10 +1,18 @@
 import 'package:comicollect/comicollect.dart';
 import 'package:comicollect/models/comic.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('reference onboarding reaches demo login', (tester) async {
     await tester.pumpWidget(ComicollectApp(controller: AppController()));
     expect(find.text('UĐI U KOLEKCIJU'), findsOneWidget);
@@ -148,7 +156,7 @@ void main() {
     expect(find.byKey(const ValueKey('condition-finish')), findsOneWidget);
   });
 
-  testWidgets('settings contain appearance sync account and server options', (
+  testWidgets('account settings hide legacy server credentials', (
     tester,
   ) async {
     SharedPreferences.setMockInitialValues({});
@@ -176,12 +184,9 @@ void main() {
       scrollable: find.byType(Scrollable).first,
     );
     expect(find.text('Kolekcionar'), findsOneWidget);
-    await tester.scrollUntilVisible(
-      find.text('Lokalni sync server'),
-      250,
-      scrollable: find.byType(Scrollable).first,
-    );
-    expect(find.text('Lokalni sync server'), findsOneWidget);
+    expect(find.text('Lokalni sync server'), findsNothing);
+    expect(find.text('API token'), findsNothing);
+    expect(find.text('Popravi sinkronizaciju'), findsOneWidget);
   });
 
   test('comic metadata survives local and sync serialization', () {

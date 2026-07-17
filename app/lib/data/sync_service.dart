@@ -163,15 +163,19 @@ class SyncService {
       );
     }
     if (error.code == 'server_mismatch') {
-      return const SyncResult(
+      return SyncResult(
         false,
-        'Drugi server · u Postavkama odaberite povezivanje novog servera',
+        accessTokenProvider == null
+            ? 'Drugi server · u Postavkama odaberite povezivanje novog servera'
+            : 'Vezu sa serverom treba popraviti · otvorite Postavke',
       );
     }
     if (error.code == 'cursor_invalid') {
-      return const SyncResult(
+      return SyncResult(
         false,
-        'Server je vraćen na starije stanje · ponovno ga povežite',
+        accessTokenProvider == null
+            ? 'Server je vraćen na starije stanje · ponovno ga povežite'
+            : 'Sync zapis računa treba obnoviti · otvorite Postavke',
       );
     }
     if (error.code == 'mutation_id_reused' ||

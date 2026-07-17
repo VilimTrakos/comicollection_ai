@@ -2,6 +2,7 @@ import 'package:comicollect/comicollect.dart';
 import 'package:comicollect/models/comic.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -10,7 +11,10 @@ import 'test_support.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  setUp(() => SharedPreferences.setMockInitialValues({}));
+  setUp(() {
+    FlutterSecureStorage.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({});
+  });
 
   testWidgets('guest onboarding enters the functional application shell', (
     tester,
@@ -47,29 +51,26 @@ void main() {
     );
   });
 
-  testWidgets('login and account creation both enter with supplied email', (
+  testWidgets('preview login never accepts credentials without auth backend', (
     tester,
   ) async {
-    for (final button in ['PRIJAVI SE', 'NAPRAVI NOVI RAČUN']) {
-      final controller = RecordingController();
-      await tester.pumpWidget(
-        MaterialApp(home: LoginGate(controller: controller)),
-      );
-      await tester.tap(find.text('UĐI U KOLEKCIJU'));
-      await tester.pump();
-      await tester.tap(find.text('Osobna kolekcija'));
-      await tester.pump();
-      await tester.enterText(
-        find.widgetWithText(TextField, 'E-mail'),
-        'test@example.com',
-      );
-      await tester.tap(find.text(button));
-      await tester.pumpAndSettle();
-      expect(find.text('COMICOLLECT'), findsOneWidget);
-      await tester.pumpWidget(const SizedBox.shrink());
-      await tester.pump();
-      controller.dispose();
-    }
+    final controller = RecordingController();
+    addTearDown(controller.dispose);
+    await tester.pumpWidget(
+      MaterialApp(home: LoginGate(controller: controller)),
+    );
+    await tester.tap(find.text('UĐI U KOLEKCIJU'));
+    await tester.pump();
+    await tester.tap(find.text('Osobna kolekcija'));
+    await tester.pump();
+    await tester.enterText(
+      find.widgetWithText(TextField, 'E-mail'),
+      'test@example.com',
+    );
+    await tester.tap(find.text('PRIJAVI SE'));
+    await tester.pump();
+    expect(find.text('COMICOLLECT'), findsNothing);
+    expect(find.text('PRIJAVA'), findsOneWidget);
   });
 
   testWidgets('shell shows loading, startup error and retries initialization', (
@@ -89,6 +90,7 @@ void main() {
     await tester.pump();
     expect(find.text('LOKALNI PODACI SE NE MOGU OTVORITI'), findsOneWidget);
     expect(find.text('Baza nije dostupna'), findsOneWidget);
+    expect(find.text('NATRAG'), findsOneWidget);
 
     await tester.tap(find.text('POKUŠAJ PONOVNO'));
     await tester.pump();

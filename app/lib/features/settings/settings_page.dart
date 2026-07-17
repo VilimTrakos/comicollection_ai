@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../app_controller.dart';
-import '../../data/sync_settings_repository.dart';
 import '../../ui/app_theme.dart';
 import '../../ui/common_widgets.dart';
+import 'legacy_sync_settings_panel.dart';
 
 class SettingsPage extends StatefulWidget {
   const SettingsPage({
@@ -12,45 +12,21 @@ class SettingsPage extends StatefulWidget {
     required this.controller,
     required this.accountEmail,
     required this.onLogout,
-    this.syncSettingsRepository = const SyncSettingsRepository(),
+    this.accountName = 'Kolekcionar',
+    this.emailVerified = true,
+    this.accountError,
   });
   final AppController controller;
   final String accountEmail;
   final VoidCallback onLogout;
-  final SyncSettingsRepository syncSettingsRepository;
+  final String accountName;
+  final bool emailVerified;
+  final String? accountError;
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final server = TextEditingController();
-  final token = TextEditingController();
-  bool loaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    load();
-  }
-
-  @override
-  void dispose() {
-    server.dispose();
-    token.dispose();
-    super.dispose();
-  }
-
-  Future<void> load() async {
-    if (loaded) return;
-    final settings = await widget.syncSettingsRepository.load();
-    server.text = settings.serverUrl.isEmpty
-        ? SyncSettingsRepository.suggestedServerUrl
-        : settings.serverUrl;
-    token.text = settings.apiToken;
-    loaded = true;
-    if (mounted) setState(() {});
-  }
-
   @override
   Widget build(BuildContext context) => AnimatedBuilder(
     animation: widget.controller.syncChanges,
@@ -192,6 +168,17 @@ class _SettingsPageState extends State<SettingsPage> {
             ],
           ),
         ),
+        if (widget.accountError case final error?)
+          Card(
+            child: ListTile(
+              leading: Icon(
+                Icons.error_outline,
+                color: Theme.of(context).colorScheme.error,
+              ),
+              title: const Text('Odjava nije uspjela'),
+              subtitle: Text(error),
+            ),
+          ),
         const SizedBox(height: 9),
         Card(
           shape: RoundedRectangleBorder(
@@ -222,8 +209,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 style: TextStyle(fontWeight: FontWeight.w900),
               ),
             ),
-            title: const Text(
-              'Kolekcionar',
+            title: Text(
+              widget.accountName,
               style: TextStyle(fontWeight: FontWeight.w700),
             ),
             subtitle: Text(
@@ -239,54 +226,37 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ),
-        const SectionTitle('PODACI I SERVER'),
-        Card(
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(14),
+        if (widget.accountEmail.isNotEmpty && !widget.emailVerified)
+          const Card(
+            child: ListTile(
+              leading: Icon(Icons.mark_email_unread_outlined),
+              title: Text('E-mail nije potvrđen'),
+              subtitle: Text(
+                'Potvrdite adresu kako biste mogli koristiti sve usluge.',
+              ),
+            ),
           ),
-          child: ExpansionTile(
-            leading: Icon(Icons.lan_outlined, color: accent),
-            title: const Text('Lokalni sync server'),
-            subtitle: Text(widget.controller.syncMessage),
-            childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
-            children: [
-              TextField(
-                controller: server,
-                keyboardType: TextInputType.url,
-                decoration: const InputDecoration(
-                  labelText: 'Adresa servera',
-                  helperText: 'Npr. http://192.168.1.50:8787',
-                ),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: token,
-                obscureText: true,
-                decoration: const InputDecoration(labelText: 'API token'),
-              ),
-              const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: FilledButton.icon(
-                  onPressed: save,
-                  icon: const Icon(Icons.save_outlined),
-                  label: const Text('SPREMI I SINKRONIZIRAJ'),
-                ),
-              ),
-              const SizedBox(height: 8),
-              SizedBox(
-                width: double.infinity,
-                child: OutlinedButton.icon(
-                  onPressed: widget.controller.syncing
-                      ? null
-                      : _connectToNewServer,
-                  icon: const Icon(Icons.swap_horiz),
-                  label: const Text('POVEŽI DRUGI ILI NOVI SERVER'),
-                ),
-              ),
-            ],
-          ),
+        SectionTitle(
+          widget.accountEmail.isEmpty ? 'PODACI I SERVER' : 'PODACI',
         ),
+        if (widget.accountEmail.isEmpty) ...[
+          LegacySyncSettingsPanel(controller: widget.controller),
+          const SizedBox(height: 9),
+        ] else ...[
+          Card(
+            child: ListTile(
+              enabled: !widget.controller.syncing,
+              leading: Icon(Icons.sync_problem_outlined, color: accent),
+              title: const Text('Popravi sinkronizaciju'),
+              subtitle: const Text(
+                'Ponovno poveži ovaj račun ako je server obnovljen ili '
+                'zamijenjen.',
+              ),
+              onTap: widget.controller.syncing ? null : _repairAccountSync,
+            ),
+          ),
+          const SizedBox(height: 9),
+        ],
         const SizedBox(height: 9),
         Card(
           shape: RoundedRectangleBorder(
@@ -322,58 +292,6 @@ class _SettingsPageState extends State<SettingsPage> {
         ),
       ],
     );
-  }
-
-  Future<void> save() async {
-    await widget.syncSettingsRepository.saveConnection(
-      serverUrl: server.text,
-      apiToken: token.text,
-    );
-    await widget.controller.sync(force: true);
-    if (mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
-    }
-  }
-
-  Future<void> _connectToNewServer() async {
-    final confirmed =
-        await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Povezati novi server?'),
-            content: const Text(
-              'Lokalna kolekcija ostaje netaknuta. Prekida se veza sa '
-              'starim serverom, a pri sljedećoj sinkronizaciji cijelo '
-              'trenutačno stanje šalje se na upisani server. Ovo koristi '
-              'samo kada je server zamijenjen ili ponovno instaliran.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('ODUSTANI'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('POVEŽI'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-    if (!confirmed || !mounted) return;
-
-    await widget.syncSettingsRepository.saveConnection(
-      serverUrl: server.text,
-      apiToken: token.text,
-    );
-    await widget.controller.resetSyncServerBinding();
-    await widget.controller.sync(force: true);
-    if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
   }
 
   Widget _settingRow(String label, Widget control) => Card(
@@ -433,6 +351,51 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(
       context,
     ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
+  }
+
+  Future<void> _repairAccountSync() async {
+    final confirmed =
+        await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Popraviti sinkronizaciju?'),
+            content: const Text(
+              'Lokalna kolekcija ostaje netaknuta. Aplikacija će obnoviti '
+              'vezu s produkcijskim serverom i sigurno ponovno usporediti '
+              'sve promjene.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('ODUSTANI'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('POPRAVI'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed || !mounted) return;
+    try {
+      await widget.controller.resetSyncServerBinding();
+      await widget.controller.sync(force: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(widget.controller.syncMessage)));
+    } on Object {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Sinkronizaciju trenutačno nije moguće popraviti. '
+            'Pokušajte ponovno.',
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _logout() async {

@@ -101,6 +101,23 @@ void main() {
     },
   );
 
+  test('authenticated server mismatch directs the account to repair', () async {
+    final service = SyncService(
+      _TransportOnlyDatabase(),
+      productionServerUrl: 'https://sync.example.test',
+      accessTokenProvider: _StaticAccessTokenProvider(),
+      transport: const _ServerMismatchTransport(),
+    );
+
+    final result = await service.sync();
+
+    expect(result.ok, isFalse);
+    expect(
+      result.message,
+      'Vezu sa serverom treba popraviti · otvorite Postavke',
+    );
+  });
+
   test('runtime also drains controller post-processing before close', () async {
     final database = _CloseTrackingDatabase();
     final collections = _BlockingCollectionRepository(database);
@@ -217,6 +234,14 @@ final class _CloseTrackingDatabase extends LocalDatabase {
   }
 }
 
+final class _TransportOnlyDatabase extends LocalDatabase {
+  @override
+  Future<bool> hasPendingV1Fallback() async => false;
+
+  @override
+  Future<List<Comic>> changedSince(int timestamp) async => const [];
+}
+
 final class _BlockingSyncService extends SyncService {
   _BlockingSyncService(super.db);
 
@@ -243,6 +268,12 @@ final class _DelayedAccessTokenProvider implements AccessTokenProvider {
   }
 }
 
+final class _StaticAccessTokenProvider implements AccessTokenProvider {
+  @override
+  Future<String> accessToken({bool forceRefresh = false}) async =>
+      'account-token';
+}
+
 final class _RecordingTransport implements SyncTransport {
   int calls = 0;
 
@@ -256,6 +287,18 @@ final class _RecordingTransport implements SyncTransport {
     calls++;
     throw StateError('A sync request must not be sent after account switch.');
   }
+}
+
+final class _ServerMismatchTransport implements SyncTransport {
+  const _ServerMismatchTransport();
+
+  @override
+  Future<SyncExchange> exchange({
+    required String serverUrl,
+    required String apiToken,
+    required int since,
+    required Iterable changes,
+  }) => throw const SyncServerException(409, code: 'server_mismatch');
 }
 
 final class _BlockingCollectionRepository extends CollectionRepository {
@@ -287,11 +330,10 @@ final class _BlockingUpsertCollectionRepository extends CollectionRepository {
 final class _ImmediateSyncCoordinator extends SyncCoordinator {
   _ImmediateSyncCoordinator({
     required LocalDatabase database,
-    required CollectionRepository collections,
+    required super.collections,
     this.quiesceError,
   }) : super(
          syncService: SyncService(database),
-         collections: collections,
          settings: const SettingsRepository(),
        );
 

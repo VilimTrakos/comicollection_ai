@@ -16,10 +16,16 @@ class Shell extends StatefulWidget {
     required this.controller,
     required this.accountEmail,
     required this.onLogout,
+    this.accountName = 'Kolekcionar',
+    this.emailVerified = true,
+    this.accountError,
   });
   final AppController controller;
   final String accountEmail;
   final VoidCallback onLogout;
+  final String accountName;
+  final bool emailVerified;
+  final String? accountError;
   @override
   State<Shell> createState() => _ShellState();
 }
@@ -162,6 +168,9 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           controller: widget.controller,
           accountEmail: widget.accountEmail,
           onLogout: widget.onLogout,
+          accountName: widget.accountName,
+          emailVerified: widget.emailVerified,
+          accountError: widget.accountError,
         ),
       ];
       return Scaffold(
@@ -185,7 +194,13 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
           child: widget.controller.loading
               ? const Center(child: CircularProgressIndicator())
               : widget.controller.startupError != null
-              ? _StartupError(controller: widget.controller)
+              ? _StartupError(
+                  controller: widget.controller,
+                  onExit: widget.onLogout,
+                  exitLabel: widget.accountEmail.isEmpty
+                      ? 'NATRAG'
+                      : 'ODJAVI SE',
+                )
               : IndexedStack(index: index, children: pages),
         ),
         floatingActionButton: FloatingActionButton(
@@ -246,9 +261,15 @@ class _ShellState extends State<Shell> with WidgetsBindingObserver {
 }
 
 class _StartupError extends StatelessWidget {
-  const _StartupError({required this.controller});
+  const _StartupError({
+    required this.controller,
+    required this.onExit,
+    required this.exitLabel,
+  });
 
   final AppController controller;
+  final VoidCallback onExit;
+  final String exitLabel;
 
   @override
   Widget build(BuildContext context) => Center(
@@ -280,6 +301,8 @@ class _StartupError extends StatelessWidget {
             icon: const Icon(Icons.refresh),
             label: const Text('POKUŠAJ PONOVNO'),
           ),
+          const SizedBox(height: 8),
+          TextButton(onPressed: onExit, child: Text(exitLabel)),
         ],
       ),
     ),
