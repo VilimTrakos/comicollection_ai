@@ -118,6 +118,26 @@ final class AuthRepository implements AccessTokenProvider {
     return session.account;
   }
 
+  /// Persists trusted account metadata returned by an authenticated account
+  /// lifecycle endpoint without changing the refresh credential.
+  Future<Account> updateAccount(Account account) async {
+    if (_loggingOut) {
+      throw const AuthException(kind: AuthFailureKind.sessionExpired);
+    }
+    final stored = _stored ?? await _readStored();
+    if (stored == null) {
+      throw const AuthException(kind: AuthFailureKind.sessionExpired);
+    }
+    if (stored.account.id != account.id ||
+        stored.account.email != account.email) {
+      throw const AuthException(kind: AuthFailureKind.invalidResponse);
+    }
+    final updated = stored.copyWith(account: account);
+    await _writeStored(updated);
+    _stored = updated;
+    return account;
+  }
+
   @override
   Future<String> accessToken({bool forceRefresh = false}) async {
     if (_loggingOut) {

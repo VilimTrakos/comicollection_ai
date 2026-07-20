@@ -2,6 +2,7 @@ enum AuthFailureKind {
   credentials,
   emailInUse,
   passwordPolicy,
+  actionTokenInvalid,
   registrationDisabled,
   sessionExpired,
   rateLimited,

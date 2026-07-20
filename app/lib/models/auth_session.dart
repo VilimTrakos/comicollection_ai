@@ -32,12 +32,13 @@ final class StoredAuthSession {
   final DateTime refreshExpiresAt;
   final String? refreshRequestId;
 
-  StoredAuthSession copyWith({String? refreshRequestId}) => StoredAuthSession(
-    account: account,
-    refreshToken: refreshToken,
-    refreshExpiresAt: refreshExpiresAt,
-    refreshRequestId: refreshRequestId,
-  );
+  StoredAuthSession copyWith({Account? account, String? refreshRequestId}) =>
+      StoredAuthSession(
+        account: account ?? this.account,
+        refreshToken: refreshToken,
+        refreshExpiresAt: refreshExpiresAt,
+        refreshRequestId: refreshRequestId,
+      );
 
   Map<String, Object?> toJson() => {
     'version': 1,

@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 
 import '../../data/auth/auth_repository.dart';
+import '../../data/auth/account_lifecycle_repository.dart';
 import '../../models/account.dart';
 import '../../models/auth_failure.dart';
 
@@ -35,7 +36,7 @@ final class AuthSignedIn extends AuthState {
 }
 
 final class AuthSessionController extends ChangeNotifier {
-  AuthSessionController(this.repository) {
+  AuthSessionController(this.repository, {this.accountLifecycle}) {
     _subscription = repository.events.listen((event) {
       if (event == AuthRepositoryEvent.sessionExpired) {
         state = const AuthSignedOut(sessionExpired: true);
@@ -45,12 +46,17 @@ final class AuthSessionController extends ChangeNotifier {
   }
 
   final AuthRepository repository;
+  final AccountLifecycleRepository? accountLifecycle;
   late final StreamSubscription<AuthRepositoryEvent> _subscription;
   AuthState state = const AuthRestoring();
   bool _logoutInProgress = false;
+  bool _lifecycleInProgress = false;
 
   bool get busy =>
-      state is AuthSubmitting || state is AuthRestoring || _logoutInProgress;
+      state is AuthSubmitting ||
+      state is AuthRestoring ||
+      _logoutInProgress ||
+      _lifecycleInProgress;
 
   Future<void> restore() async {
     state = const AuthRestoring();
@@ -83,6 +89,29 @@ final class AuthSessionController extends ChangeNotifier {
         ),
       );
 
+  Future<bool> requestEmailVerification() => _runSignedInLifecycle(
+    (lifecycle, _) => lifecycle.requestEmailVerification(),
+  );
+
+  Future<bool> confirmEmailVerification(String token) =>
+      _runSignedInLifecycle((lifecycle, _) async {
+        final account = await lifecycle.confirmEmailVerification(token);
+        await repository.updateAccount(account);
+        state = AuthSignedIn(account, offline: false);
+      });
+
+  Future<bool> requestPasswordReset(String email) => _runSignedOutLifecycle(
+    (lifecycle) => lifecycle.requestPasswordReset(email),
+  );
+
+  Future<bool> confirmPasswordReset({
+    required String token,
+    required String newPassword,
+  }) => _runSignedOutLifecycle(
+    (lifecycle) =>
+        lifecycle.confirmPasswordReset(token: token, newPassword: newPassword),
+  );
+
   Future<void> _submit(
     AuthOperation operation,
     Future<Account> Function() action,
@@ -100,6 +129,73 @@ final class AuthSessionController extends ChangeNotifier {
       );
     }
     notifyListeners();
+  }
+
+  Future<bool> _runSignedInLifecycle(
+    Future<void> Function(
+      AccountLifecycleRepository lifecycle,
+      AuthSignedIn current,
+    )
+    action,
+  ) async {
+    final current = state;
+    final lifecycle = accountLifecycle;
+    if (busy || current is! AuthSignedIn || lifecycle == null) return false;
+    _lifecycleInProgress = true;
+    notifyListeners();
+    try {
+      await action(lifecycle, current);
+      if (identical(state, current)) {
+        state = AuthSignedIn(current.account, offline: current.offline);
+      }
+      return true;
+    } on AuthException catch (error) {
+      if (state is AuthSignedIn) {
+        state = AuthSignedIn(
+          current.account,
+          offline: current.offline,
+          failure: error,
+        );
+      }
+      return false;
+    } on Object {
+      if (state is AuthSignedIn) {
+        state = AuthSignedIn(
+          current.account,
+          offline: current.offline,
+          failure: const AuthException(kind: AuthFailureKind.server),
+        );
+      }
+      return false;
+    } finally {
+      _lifecycleInProgress = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> _runSignedOutLifecycle(
+    Future<void> Function(AccountLifecycleRepository lifecycle) action,
+  ) async {
+    final lifecycle = accountLifecycle;
+    if (busy || state is! AuthSignedOut || lifecycle == null) return false;
+    _lifecycleInProgress = true;
+    notifyListeners();
+    try {
+      await action(lifecycle);
+      state = const AuthSignedOut();
+      return true;
+    } on AuthException catch (error) {
+      state = AuthSignedOut(failure: error);
+      return false;
+    } on Object {
+      state = const AuthSignedOut(
+        failure: AuthException(kind: AuthFailureKind.server),
+      );
+      return false;
+    } finally {
+      _lifecycleInProgress = false;
+      notifyListeners();
+    }
   }
 
   Future<void> logout() async {
