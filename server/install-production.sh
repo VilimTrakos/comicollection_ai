@@ -31,7 +31,8 @@ require_file() {
 }
 
 for file in \
-  comicollect_server.py comicollect_wsgi.py comicollect_backup.py \
+  comicollect_server.py comicollect_wsgi.py comicollect_mailer.py \
+  comicollect_backup.py \
   comicollect_backend/backup.py comicollect_backend/backup_verification.py \
   comicollect_backend/config.py \
   gunicorn.conf.py requirements-production.txt \
@@ -39,6 +40,8 @@ for file in \
   systemd/comicollect-production-check@.service \
   systemd/comicollect-production-backup.service \
   systemd/comicollect-production-backup.timer \
+  systemd/comicollect-production-mailer.service \
+  systemd/comicollect-production-mailer.timer \
   deploy/comicollect.production.env.example \
   deploy/nginx/comicollect.conf \
   deploy/production-healthcheck.py \

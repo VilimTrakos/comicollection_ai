@@ -1,0 +1,12 @@
+[Unit]
+Description=Dispatch queued Comicollect account emails every minute
+
+[Timer]
+OnCalendar=*-*-* *:*:00
+Persistent=true
+RandomizedDelaySec=15s
+AccuracySec=5s
+Unit=comicollect-production-mailer.service
+
+[Install]
+WantedBy=timers.target

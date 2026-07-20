@@ -1,0 +1,58 @@
+[Unit]
+Description=Dispatch queued Comicollect account emails
+Documentation=file:/opt/comicollect/current/docs/production-deployment.md
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/var/lib/comicollect
+
+[Service]
+Type=oneshot
+User=comicollect
+Group=comicollect
+WorkingDirectory=/opt/comicollect/current/server
+EnvironmentFile=/etc/comicollect/production.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/comicollect/current/venv/bin/python -m comicollect_mailer dispatch --max-messages 100
+TimeoutStartSec=20min
+RuntimeMaxSec=20min
+TimeoutStopSec=30s
+
+UMask=0077
+RuntimeDirectory=comicollect-mailer
+RuntimeDirectoryMode=0750
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectClock=true
+ProtectHostname=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+RemoveIPC=true
+
+# The checked-in profile deliberately permits only a loopback SMTP relay.
+# Add reviewed provider CIDRs with a root-owned systemd drop-in; never remove
+# IPAddressDeny or grant unrestricted internet egress to this unit.
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/var/lib/comicollect /run/comicollect-mailer
+
+Nice=5
+TasksMax=16
+LimitNOFILE=512
+MemoryHigh=128M
+MemoryMax=256M

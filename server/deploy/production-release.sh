@@ -14,6 +14,8 @@ UNIT_DIR=/etc/systemd/system
 API_UNIT=comicollect-production.service
 BACKUP_UNIT=comicollect-production-backup.service
 TIMER_UNIT=comicollect-production-backup.timer
+MAILER_UNIT=comicollect-production-mailer.service
+MAILER_TIMER=comicollect-production-mailer.timer
 CHECK_TEMPLATE=comicollect-production-check@.service
 LEGACY_CHECK_UNIT=comicollect-production-check.service
 HEALTHCHECK_TARGET=$APP_ROOT/tools/production-healthcheck.py
@@ -39,6 +41,9 @@ OLD_API_ENABLED=false
 OLD_TIMER_ACTIVE=false
 OLD_TIMER_ENABLED=false
 TIMER_PAUSED=false
+OLD_MAILER_TIMER_ACTIVE=false
+OLD_MAILER_TIMER_ENABLED=false
+MAILER_TIMER_PAUSED=false
 
 atomic_current() {
   target=$1
@@ -85,6 +90,11 @@ restore_enabled_state() {
   else
     systemctl disable "$TIMER_UNIT" >/dev/null 2>&1 || true
   fi
+  if [ "$OLD_MAILER_TIMER_ENABLED" = true ]; then
+    systemctl enable "$MAILER_TIMER" >/dev/null 2>&1 || true
+  else
+    systemctl disable "$MAILER_TIMER" >/dev/null 2>&1 || true
+  fi
 }
 
 rollback() {
@@ -100,6 +110,7 @@ rollback() {
 
   if [ "$UNITS_INSTALLED" = true ]; then
     systemctl stop "$API_UNIT" >/dev/null 2>&1 || true
+    systemctl stop "$MAILER_TIMER" "$MAILER_UNIT" >/dev/null 2>&1 || true
   fi
   if [ "$CURRENT_CHANGED" = true ]; then
     if [ -n "$PREVIOUS_TARGET" ]; then
@@ -112,6 +123,8 @@ rollback() {
     restore_unit "$API_UNIT"
     restore_unit "$BACKUP_UNIT"
     restore_unit "$TIMER_UNIT"
+    restore_unit "$MAILER_UNIT"
+    restore_unit "$MAILER_TIMER"
     restore_unit "$LEGACY_CHECK_UNIT"
     restore_healthcheck
   fi
@@ -134,8 +147,18 @@ rollback() {
     else
       systemctl stop "$TIMER_UNIT" >/dev/null 2>&1 || true
     fi
+    if [ "$OLD_MAILER_TIMER_ACTIVE" = true ]; then
+      systemctl start "$MAILER_TIMER" >/dev/null 2>&1 || true
+    else
+      systemctl stop "$MAILER_TIMER" >/dev/null 2>&1 || true
+    fi
   elif [ "$TIMER_PAUSED" = true ] && [ "$OLD_TIMER_ACTIVE" = true ]; then
     systemctl start "$TIMER_UNIT" >/dev/null 2>&1 || true
+  fi
+  if [ "$UNITS_INSTALLED" = false ] && \
+     [ "$MAILER_TIMER_PAUSED" = true ] && \
+     [ "$OLD_MAILER_TIMER_ACTIVE" = true ]; then
+    systemctl start "$MAILER_TIMER" >/dev/null 2>&1 || true
   fi
   if [ "$CANDIDATE_CREATED" = true ]; then
     rm -rf "$CANDIDATE"
@@ -170,6 +193,7 @@ install -d -o root -g root -m 0755 \
   "$CANDIDATE/docs"
 install -o root -g root -m 0755 \
   "$SOURCE_DIR/comicollect_server.py" \
+  "$SOURCE_DIR/comicollect_mailer.py" \
   "$SOURCE_DIR/comicollect_backup.py" \
   "$CANDIDATE/server/"
 install -o root -g root -m 0644 \
@@ -201,6 +225,18 @@ python3 -m venv "$CANDIDATE/venv"
 "$CANDIDATE/venv/bin/pip" install --disable-pip-version-check \
   --requirement "$CANDIDATE/server/requirements-production.txt"
 
+# Stop the dispatcher before the candidate is allowed to migrate the shared
+# auth/outbox database. An interrupted lease is recovered by the next run.
+systemctl is-active --quiet "$MAILER_TIMER" && \
+  OLD_MAILER_TIMER_ACTIVE=true || true
+systemctl is-enabled --quiet "$MAILER_TIMER" && \
+  OLD_MAILER_TIMER_ENABLED=true || true
+if [ "$OLD_MAILER_TIMER_ACTIVE" = true ]; then
+  MAILER_TIMER_PAUSED=true
+  systemctl stop "$MAILER_TIMER"
+fi
+systemctl stop "$MAILER_UNIT" >/dev/null 2>&1 || true
+
 remember_unit "$CHECK_TEMPLATE"
 CHECK_TEMPLATE_INSTALLED=true
 install -o root -g root -m 0644 \
@@ -226,6 +262,8 @@ fi
 remember_unit "$API_UNIT"
 remember_unit "$BACKUP_UNIT"
 remember_unit "$TIMER_UNIT"
+remember_unit "$MAILER_UNIT"
+remember_unit "$MAILER_TIMER"
 remember_unit "$LEGACY_CHECK_UNIT"
 if [ -f "$HEALTHCHECK_TARGET" ]; then
   cp -p "$HEALTHCHECK_TARGET" "$UNIT_BACKUP/production-healthcheck.py"
@@ -239,14 +277,16 @@ install -o root -g root -m 0755 \
 install -o root -g root -m 0644 "$SOURCE_DIR/systemd/$API_UNIT" "$UNIT_DIR/$API_UNIT"
 install -o root -g root -m 0644 "$SOURCE_DIR/systemd/$BACKUP_UNIT" "$UNIT_DIR/$BACKUP_UNIT"
 install -o root -g root -m 0644 "$SOURCE_DIR/systemd/$TIMER_UNIT" "$UNIT_DIR/$TIMER_UNIT"
+install -o root -g root -m 0644 "$SOURCE_DIR/systemd/$MAILER_UNIT" "$UNIT_DIR/$MAILER_UNIT"
+install -o root -g root -m 0644 "$SOURCE_DIR/systemd/$MAILER_TIMER" "$UNIT_DIR/$MAILER_TIMER"
 systemctl daemon-reload
 
 atomic_current "$CANDIDATE"
 CURRENT_CHANGED=true
 systemctl reset-failed "$API_UNIT" >/dev/null 2>&1 || true
 systemctl restart "$API_UNIT"
-systemctl enable "$API_UNIT" "$TIMER_UNIT"
-systemctl start "$TIMER_UNIT"
+systemctl enable "$API_UNIT" "$TIMER_UNIT" "$MAILER_TIMER"
+systemctl start "$TIMER_UNIT" "$MAILER_TIMER"
 install -o root -g root -m 0444 /dev/null "$CANDIDATE/.activated"
 
 CURRENT_TARGET=$(readlink -f "$CURRENT_LINK")
