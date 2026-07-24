@@ -48,6 +48,26 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(controller.flash, isFalse);
     });
+
+    test('new session discards every unsaved recognition result', () {
+      final controller = SmartScannerController();
+      addTearDown(controller.dispose);
+      final issue = testIssue(5, title: 'Kuća sjećanja');
+
+      controller.accept(issue, 'Naslovnica prepoznata');
+      controller.reportUnknownBarcode('123456');
+      controller.setOldBoyNeedsSelection(true);
+
+      controller.startNewSession();
+
+      expect(controller.scanned, isEmpty);
+      expect(controller.pendingBarcode, isNull);
+      expect(controller.oldBoyNeedsSelection, isFalse);
+      expect(controller.flash, isFalse);
+      expect(controller.capturing, isFalse);
+      expect(controller.message, 'Uperi u barkod ili jednu naslovnicu');
+      expect(controller.accept(issue, 'Naslovnica prepoznata'), isTrue);
+    });
   });
 
   group('CoverFrameTracker', () {

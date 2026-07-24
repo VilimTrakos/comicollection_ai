@@ -64,6 +64,7 @@ class _SmartScannerPageState extends State<SmartScannerPage>
     super.initState();
     _ownsScanner = widget.scannerController == null;
     _scanner = widget.scannerController ?? SmartScannerController();
+    _scanner.startNewSession();
     _ownsBarcodeRecognition = widget.barcodeRecognitionService == null;
     _barcodeRecognition =
         widget.barcodeRecognitionService ?? MlKitBarcodeRecognitionService();
@@ -352,7 +353,12 @@ class _SmartScannerPageState extends State<SmartScannerPage>
         ),
       ),
     );
-    if (saved == true && mounted) Navigator.pop(context);
+    if (!mounted) return;
+    if (saved == true) {
+      Navigator.pop(context);
+      return;
+    }
+    _scanner.startNewSession();
   }
 
   Future<void> _toggleFlash() async {

@@ -14,9 +14,11 @@ class SmartScannerController extends ChangeNotifier {
   SmartScannerController({
     this.flashDuration = const Duration(milliseconds: 450),
     String initialMessage = 'Uperi u barkod ili jednu naslovnicu',
-  }) : _message = initialMessage;
+  }) : _initialMessage = initialMessage,
+       _message = initialMessage;
 
   final Duration flashDuration;
+  final String _initialMessage;
   final List<CatalogIssue> _scanned = [];
   late final UnmodifiableListView<CatalogIssue> _scannedView =
       UnmodifiableListView(_scanned);
@@ -36,6 +38,24 @@ class SmartScannerController extends ChangeNotifier {
   bool get flash => _flash;
   bool get oldBoyNeedsSelection => _oldBoyNeedsSelection;
   List<CatalogIssue> get scanned => _scannedView;
+
+  /// Starts a clean, independent scanning session.
+  ///
+  /// Recognition results are only temporary until the review is saved. A
+  /// cancelled review or a newly opened scanner must therefore not reuse
+  /// issues, barcode prompts, or feedback from the previous session.
+  void startNewSession() {
+    _flashTimer?.cancel();
+    _flashTimer = null;
+    _scanned.clear();
+    _message = _initialMessage;
+    _lastUnknownBarcode = null;
+    _pendingBarcode = null;
+    _capturing = false;
+    _flash = false;
+    _oldBoyNeedsSelection = false;
+    notifyListeners();
+  }
 
   void setMessage(String value) {
     if (_message == value) return;

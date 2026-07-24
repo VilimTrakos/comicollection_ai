@@ -1,3 +1,4 @@
+import 'package:comicollect/features/scanner/smart_scanner_controller.dart';
 import 'package:comicollect/screens/smart_scanner_page.dart';
 import 'package:comicollect/services/shelf_text_matcher.dart';
 import 'package:flutter/material.dart';
@@ -113,6 +114,42 @@ void main() {
     await tester.tap(find.text('UČITAJ IZ GALERIJE'));
     await tester.pump(const Duration(milliseconds: 100));
     expect(find.text('Odabir slike je otkazan'), findsOneWidget);
+  });
+
+  testWidgets('leaving review discards the unsaved scanning session', (
+    tester,
+  ) async {
+    final controller = RecordingController();
+    final scanner = SmartScannerController(flashDuration: Duration.zero);
+    addTearDown(controller.dispose);
+    addTearDown(scanner.dispose);
+    final issue = testIssue(5, title: 'Kuća sjećanja');
+
+    await tester.pumpWidget(
+      _app(
+        SmartScannerPage(
+          controller: controller,
+          scannerController: scanner,
+          cameraLoader: () async => const [],
+        ),
+      ),
+    );
+    scanner.accept(issue, 'Naslovnica prepoznata');
+    await tester.pump();
+
+    expect(find.text('1 strip u popisu'), findsOneWidget);
+    await tester.tap(find.text('PREGLEDAJ'));
+    await tester.pumpAndSettle();
+    expect(find.text('PRONAĐENO 1'), findsOneWidget);
+
+    await tester.pageBack();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(scanner.scanned, isEmpty);
+    expect(find.text('1 strip u popisu'), findsNothing);
+    expect(scanner.merge([issue]), 1);
+    expect(scanner.scanned, [issue]);
   });
 
   testWidgets('scan review excludes issues and records owned status', (
